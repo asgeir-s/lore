@@ -1,0 +1,129 @@
+import { invoke } from "@tauri-apps/api/core";
+
+export interface NoteMetadata {
+  id: string;
+  path: string;
+  title: string;
+  created: string;
+  tags: string[];
+}
+
+export interface NoteContent {
+  id: string;
+  title: string;
+  content: string;
+  tags: string[];
+  created: string;
+}
+
+/** Check if we're running inside Tauri */
+function isTauri(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+// In-memory store for web-only mode (dev without Tauri)
+let memoryNotes: Map<string, { meta: NoteMetadata; content: string }> =
+  new Map();
+
+function generateId(): string {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+export async function saveNote(
+  id: string | null,
+  content: string,
+  tags: string[],
+): Promise<NoteMetadata> {
+  if (isTauri()) {
+    return invoke<NoteMetadata>("save_note", { id, content, tags });
+  }
+  // Fallback for web dev
+  const noteId = id ?? generateId();
+  const title = extractTitle(content);
+  const meta: NoteMetadata = {
+    id: noteId,
+    path: `${noteId}.md`,
+    title,
+    created: new Date().toISOString(),
+    tags,
+  };
+  memoryNotes.set(noteId, { meta, content });
+  return meta;
+}
+
+export async function getNote(id: string): Promise<NoteContent> {
+  if (isTauri()) {
+    return invoke<NoteContent>("get_note", { id });
+  }
+  const note = memoryNotes.get(id);
+  if (!note) throw new Error("Note not found");
+  return {
+    id,
+    title: note.meta.title,
+    content: note.content,
+    tags: note.meta.tags,
+    created: note.meta.created,
+  };
+}
+
+export async function listRecentNotes(
+  limit: number = 20,
+): Promise<NoteMetadata[]> {
+  if (isTauri()) {
+    return invoke<NoteMetadata[]>("list_recent_notes", { limit });
+  }
+  const notes = Array.from(memoryNotes.values())
+    .map((n) => n.meta)
+    .sort((a, b) => b.created.localeCompare(a.created));
+  return notes.slice(0, limit);
+}
+
+export async function searchNotes(query: string): Promise<NoteMetadata[]> {
+  if (isTauri()) {
+    return invoke<NoteMetadata[]>("search_notes", { query });
+  }
+  const q = query.toLowerCase();
+  const results: NoteMetadata[] = [];
+  for (const [, note] of memoryNotes) {
+    if (
+      note.content.toLowerCase().includes(q) ||
+      note.meta.title.toLowerCase().includes(q)
+    ) {
+      results.push(note.meta);
+    }
+  }
+  return results;
+}
+
+export async function getAllTags(): Promise<string[]> {
+  if (isTauri()) {
+    return invoke<string[]>("get_all_tags");
+  }
+  const tags = new Set<string>();
+  for (const [, note] of memoryNotes) {
+    for (const tag of note.meta.tags) {
+      tags.add(tag);
+    }
+  }
+  return Array.from(tags).sort();
+}
+
+export async function rebuildIndex(): Promise<void> {
+  if (isTauri()) {
+    return invoke<void>("rebuild_index");
+  }
+}
+
+function extractTitle(content: string): string {
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith("# ")) return trimmed.slice(2).trim();
+    return trimmed;
+  }
+  return "Untitled";
+}
