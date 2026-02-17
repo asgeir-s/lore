@@ -7,11 +7,15 @@ import {
   useState,
 } from "react";
 import { EditorState, Compartment } from "@codemirror/state";
-import { EditorView, keymap, placeholder, ViewUpdate } from "@codemirror/view";
+import { EditorView, drawSelection, keymap, placeholder, ViewUpdate } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { defaultKeymap } from "@codemirror/commands";
+import { defaultKeymap, historyKeymap } from "@codemirror/commands";
+import { history } from "@codemirror/commands";
 import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
+import { vim, Vim } from "@replit/codemirror-vim";
+
+Vim.map("fd", "<Esc>", "insert");
 import { SlashPalette, slashCommands } from "./SlashPalette";
 import { themes } from "./themes";
 import { openUrl } from "./api";
@@ -20,6 +24,8 @@ interface EditorProps {
   content: string;
   onChange: (value: string) => void;
   themeId: string;
+  vimEnabled: boolean;
+  onVimToggle: () => void;
 }
 
 export interface EditorHandle {
@@ -46,9 +52,11 @@ const editorTheme = EditorView.theme({
   "&.cm-focused .cm-cursor": {
     borderLeftColor: "var(--text)",
   },
-  "&.cm-focused .cm-selectionBackground, ::selection": {
-    background: "var(--accent) !important",
-    opacity: "0.2",
+  "&.cm-focused .cm-selectionBackground": {
+    background: "color-mix(in srgb, var(--accent) 25%, transparent) !important",
+  },
+  "& ::selection": {
+    background: "color-mix(in srgb, var(--accent) 25%, transparent)",
   },
   ".cm-gutters": {
     display: "none",
@@ -110,13 +118,14 @@ function findLinkUrl(view: EditorView, clientX: number, clientY: number): string
 }
 
 export const Editor = forwardRef<EditorHandle, EditorProps>(
-  ({ content, onChange, themeId }, ref) => {
+  ({ content, onChange, themeId, vimEnabled, onVimToggle }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const onChangeRef = useRef(onChange);
     const isSettingContent = useRef(false);
     const highlightCompartment = useRef(new Compartment());
     const themeCompartment = useRef(new Compartment());
+    const vimCompartment = useRef(new Compartment());
 
     const [slashState, setSlashState] = useState<{
       visible: boolean;
@@ -208,7 +217,10 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
       const startState = EditorState.create({
         doc: content,
         extensions: [
-          keymap.of(defaultKeymap),
+          vimCompartment.current.of(vimEnabled ? vim() : []),
+          drawSelection(),
+          history(),
+          keymap.of([...defaultKeymap, ...historyKeymap]),
           markdown({ base: markdownLanguage }),
           highlightCompartment.current.of(syntaxHighlighting(normalHighlightStyle)),
           themeCompartment.current.of(editorTheme),
@@ -271,6 +283,15 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
       });
     }, [themeId]);
 
+    // Reconfigure vim mode
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: vimCompartment.current.reconfigure(vimEnabled ? vim() : []),
+      });
+    }, [vimEnabled]);
+
     // Sync external content changes to editor
     useEffect(() => {
       const view = viewRef.current;
@@ -296,6 +317,13 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
 
     return (
       <div className={`editor-container ${isThemed ? "themed" : ""}`} ref={containerRef}>
+        <button
+          className={`vim-toggle ${vimEnabled ? "active" : ""}`}
+          onClick={onVimToggle}
+          title={vimEnabled ? "Disable Vim mode" : "Enable Vim mode"}
+        >
+          Vim
+        </button>
         {slashState.visible && filteredCommands.length > 0 && (
           <SlashPalette
             commands={filteredCommands}

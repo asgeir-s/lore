@@ -38,6 +38,7 @@ export default function App() {
   const [showHotkeys, setShowHotkeys] = useState(false);
   const [sortBy, setSortBy] = useState<SortBy>("created");
   const [themeId, setThemeId] = useState(() => loadSavedTheme());
+  const [vimEnabled, setVimEnabled] = useState(() => localStorage.getItem("note-vim") === "1");
   const [zoom, setZoom] = useState(() => {
     const saved = localStorage.getItem("note-zoom");
     return saved ? Number(saved) : 100;
@@ -49,6 +50,8 @@ export default function App() {
   const [gitBanner, setGitBanner] = useState(false);
   const [gitRemoteUrl, setGitRemoteUrl] = useState("");
   const [gitError, setGitError] = useState<string | null>(null);
+  const [closeWarningIndex, setCloseWarningIndex] = useState<number | null>(null);
+  const closeWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const primaryModifier = isMacOS() ? "⌘" : "Ctrl";
 
   const panelRefs = useRef<Map<string, PanelHandle>>(new Map());
@@ -72,6 +75,11 @@ export default function App() {
     saveTheme(id);
     applyThemeVars(id);
   }, []);
+
+  // Persist vim mode
+  useEffect(() => {
+    localStorage.setItem("note-vim", vimEnabled ? "1" : "0");
+  }, [vimEnabled]);
 
   // Apply zoom
   useEffect(() => {
@@ -318,14 +326,19 @@ export default function App() {
 
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        if (!activePanel.isUserModified()) {
-          activePanel.openSelectedNote(true);
-        } else {
+        const editorFocused = !!document.activeElement?.closest(".cm-editor");
+        if (activePanel.isUserModified() && editorFocused) {
           activePanel.save();
+        } else {
+          activePanel.openSelectedNote(true);
         }
         return;
       }
       if (e.key === "Escape") {
+        const editorFocused = !!document.activeElement?.closest(".cm-editor");
+        if (vimEnabled && editorFocused) {
+          return; // Let Vim handle Escape; Tab out of editor first to discard
+        }
         e.preventDefault();
         if (activePanel.isUserModified()) {
           // Discard edits but keep panel open
@@ -346,12 +359,7 @@ export default function App() {
       }
       if (e.key === "n" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        if (activePanel.isUserModified()) {
-          openNewPanelToRight();
-        } else {
-          activePanel.clear();
-          activePanel.focusEditor();
-        }
+        openNewPanelToRight();
         return;
       }
       if (
@@ -366,15 +374,20 @@ export default function App() {
       if (e.key === "w" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         if (panels.length <= 1) return;
-        const lastIndex = panels.length - 1;
-        const lastPanel = panelRefs.current.get(panels[lastIndex].id);
-        const restoreTo = prevActivePanelRef.current;
-        if (lastPanel) {
-          if (lastPanel.isUserModified()) {
-            lastPanel.save().then(() => closePanel(lastIndex, restoreTo));
+        if (activePanel.isUserModified() && activePanel.hasContent()) {
+          if (closeWarningIndex === activePanelIndex) {
+            // Second press — confirm close, discard unsaved content
+            if (closeWarningTimeout.current) clearTimeout(closeWarningTimeout.current);
+            setCloseWarningIndex(null);
+            closePanel(activePanelIndex);
           } else {
-            closePanel(lastIndex, restoreTo);
+            // First press — show warning
+            if (closeWarningTimeout.current) clearTimeout(closeWarningTimeout.current);
+            setCloseWarningIndex(activePanelIndex);
+            closeWarningTimeout.current = setTimeout(() => setCloseWarningIndex(null), 3000);
           }
+        } else {
+          closePanel(activePanelIndex);
         }
         return;
       }
@@ -488,7 +501,7 @@ export default function App() {
         }
       }
     },
-    [panels, activePanelIndex, closePanel, openNewPanelToRight, findPanelWithNote, openNoteToRight],
+    [panels, activePanelIndex, closePanel, openNewPanelToRight, findPanelWithNote, openNoteToRight, vimEnabled, closeWarningIndex],
   );
 
   const handleKeyUp = useCallback(
@@ -719,7 +732,7 @@ export default function App() {
             />
           )}
           <div
-            className="panel-container"
+            className={`panel-container ${activePanelIndex === index ? "focused" : ""}`}
             style={{ flex: panelWidths[index] }}
           >
             <NotePanel
@@ -731,12 +744,13 @@ export default function App() {
               }
               onSaved={refreshSharedState}
               onFocus={() => setActivePanelIndex(index)}
-              isFocused={activePanelIndex === index}
               initialNoteId={panel.initialNoteId}
               independent={panel.independent}
               sortBy={sortBy}
               onSortChange={setSortBy}
               themeId={themeId}
+              vimEnabled={vimEnabled}
+              onVimToggle={() => setVimEnabled((v) => !v)}
             />
           </div>
         </Fragment>
@@ -751,6 +765,10 @@ export default function App() {
       )}
       {importStatus && createPortal(
         <div className="import-toast">{importStatus}</div>,
+        document.body,
+      )}
+      {closeWarningIndex !== null && createPortal(
+        <div className="close-warning-toast">Unsaved changes — press <kbd>{primaryModifier}</kbd> <kbd>W</kbd> again to close</div>,
         document.body,
       )}
       {gitError && createPortal(

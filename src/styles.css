@@ -58,6 +58,11 @@ body {
   min-width: 0;
   overflow-y: auto;
   height: 100vh;
+  border-top: 2px solid transparent;
+}
+
+.panel-container.focused {
+  border-top-color: var(--accent);
 }
 
 /* Note panel content area */
@@ -66,11 +71,6 @@ body {
   min-height: 100%;
   display: flex;
   flex-direction: column;
-  border-top: 2px solid transparent;
-}
-
-.note-panel.focused {
-  border-top-color: var(--accent);
 }
 
 /* Drag splitter */
@@ -161,6 +161,66 @@ body {
 .editor-container .cm-editor .cm-placeholder {
   color: var(--text-muted);
   font-style: italic;
+}
+
+/* Vim toggle button */
+.vim-toggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.editor-container:hover .vim-toggle,
+.editor-container:focus-within .vim-toggle {
+  opacity: 1;
+}
+
+.vim-toggle:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.vim-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+/* Vim status bar */
+.cm-vim-panel {
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 2px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.cm-vim-panel input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 1px 4px;
+  outline: none;
+}
+
+.cm-vim-panel input:focus {
+  border-color: var(--accent);
 }
 
 /* Rendered markdown view */
@@ -730,6 +790,40 @@ body {
 
 @media (prefers-color-scheme: dark) {
   .import-toast {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+}
+
+/* Close warning toast */
+.close-warning-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 250;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #d4a017;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, #d4a017 30%, var(--border));
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  white-space: nowrap;
+}
+
+.close-warning-toast kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .close-warning-toast {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   }
 }

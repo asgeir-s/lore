@@ -24,6 +24,7 @@ export interface PanelHandle {
   clear: () => void;
   focusEditor: () => void;
   isUserModified: () => boolean;
+  hasContent: () => boolean;
   getLoadedNoteId: () => string | null;
   canGoBack: () => boolean;
   goBack: () => void;
@@ -43,12 +44,13 @@ interface NotePanelProps {
   onNoteClick: (noteId: string, metaKey: boolean) => void;
   onSaved: () => Promise<void>;
   onFocus: () => void;
-  isFocused: boolean;
   initialNoteId?: string;
   independent?: boolean;
   sortBy: SortBy;
   onSortChange: (sortBy: SortBy) => void;
   themeId: string;
+  vimEnabled: boolean;
+  onVimToggle: () => void;
 }
 
 export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
@@ -59,12 +61,13 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       onNoteClick,
       onSaved,
       onFocus,
-      isFocused,
       initialNoteId,
       independent,
       sortBy,
       onSortChange,
       themeId,
+      vimEnabled,
+      onVimToggle,
     },
     ref,
   ) => {
@@ -155,7 +158,11 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           await loadNoteInternal(current, false);
         },
         clear: clearPanel,
-        focusEditor: () => editorRef.current?.focus(),
+        focusEditor: () => {
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => editorRef.current?.focus()),
+          );
+        },
         edit: () => {
           setUserModified(true);
           requestAnimationFrame(() =>
@@ -175,6 +182,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           }
         },
         isUserModified: () => userModified,
+        hasContent: () => content.trim().length > 0,
         getLoadedNoteId: () => loadedNoteId,
         canGoBack: () => historyRef.current.length > 0,
         goBack: async () => {
@@ -310,7 +318,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
 
     return (
       <div
-        className={`note-panel ${isFocused ? "focused" : ""}`}
+        className="note-panel"
         onPointerDown={onFocus}
       >
         {showTagInput && (
@@ -331,7 +339,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           )}
         </div>
         {editing ? (
-          <Editor ref={editorRef} content={content} onChange={handleChange} themeId={themeId} />
+          <Editor ref={editorRef} content={content} onChange={handleChange} themeId={themeId} vimEnabled={vimEnabled} onVimToggle={onVimToggle} />
         ) : (
           <MarkdownView content={content} onEdit={handleEdit} />
         )}
