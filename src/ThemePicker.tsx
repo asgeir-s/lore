@@ -67,7 +67,7 @@ export function ThemePicker({ themeId, onThemeChange }: ThemePickerProps) {
                     }}
                   >
                     {entry ? entry.label : "System Default"}
-                    {themeId === id && <span className="theme-check">&check;</span>}
+                    {themeId === id && <span className="theme-check">✓</span>}
                   </button>
                 ))}
               </div>

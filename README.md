@@ -20,6 +20,7 @@ Capture first, organize never. Notes live as flat markdown files. Structure emer
 
 - [Rust](https://rustup.rs/) (latest stable)
 - [Node.js](https://nodejs.org/) >= 20
+- [Git](https://git-scm.com/) (for automatic note version history; pre-installed on macOS)
 - System dependencies for Tauri v2 (see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/))
 
 ### Install dependencies
@@ -34,11 +35,17 @@ npm install
 cargo tauri dev
 ```
 
-### Build
+### Build and install
+
+Build the app, then replace the old version in Applications:
 
 ```bash
-cargo tauri build
+npm run install-app
 ```
+
+Your settings (theme, zoom, git remote) are preserved between builds.
+
+To update after making changes, just run the two commands above again.
 
 ## Document Format
 
@@ -60,28 +67,28 @@ Notes are stored as flat files in `~/dump/` (configurable).
 
 ## Keyboard Shortcuts
 
-| Shortcut       | Action                              |
-|----------------|-------------------------------------|
-| `Cmd+Enter`    | Save note                           |
-| `Escape`       | Clear textarea, discard content     |
-| `Cmd+T`        | Toggle tag input                    |
+| Shortcut    | Action                          |
+| ----------- | ------------------------------- |
+| `Cmd+Enter` | Save note                       |
+| `Escape`    | Clear textarea, discard content |
+| `Cmd+T`     | Toggle tag input                |
 
 ## Slash Commands
 
 Type `/` to open the command palette:
 
-| Command    | Inserts              |
-|------------|----------------------|
-| `/h1`      | `# ` (Heading 1)    |
-| `/h2`      | `## ` (Heading 2)   |
-| `/h3`      | `### ` (Heading 3)  |
-| `/quote`   | `> ` (Blockquote)   |
-| `/list`    | `- ` (Bullet list)  |
-| `/ol`      | `1. ` (Numbered list)|
-| `/code`    | Code block           |
-| `/link`    | Link template        |
-| `/note`    | `[[note:]]` link     |
-| `/divider` | `---` (Horizontal rule)|
+| Command    | Inserts                 |
+| ---------- | ----------------------- |
+| `/h1`      | `# ` (Heading 1)        |
+| `/h2`      | `## ` (Heading 2)       |
+| `/h3`      | `### ` (Heading 3)      |
+| `/quote`   | `> ` (Blockquote)       |
+| `/list`    | `- ` (Bullet list)      |
+| `/ol`      | `1. ` (Numbered list)   |
+| `/code`    | Code block              |
+| `/link`    | Link template           |
+| `/note`    | `[[note:]]` link        |
+| `/divider` | `---` (Horizontal rule) |
 
 ## Themes
 
