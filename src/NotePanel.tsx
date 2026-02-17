@@ -72,7 +72,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     const [highlightIndex, setHighlightIndex] = useState(-1);
     const [starred, setStarred] = useState(false);
     const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const editorRef = useRef<{ focus: () => void; clear: () => void } | null>(
+    const editorRef = useRef<{ focus: () => void; blur: () => void; clear: () => void } | null>(
       null,
     );
     const initialLoadDone = useRef(false);
@@ -95,6 +95,9 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           setStarred(note.starred);
           setRelatedNotes([]);
           setUserModified(false);
+          // Remove focus from editor so keystrokes don't go to it.
+          editorRef.current?.blur();
+          requestAnimationFrame(() => editorRef.current?.blur());
         } catch (e) {
           console.error("Failed to load note:", e);
         }
@@ -302,7 +305,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             </div>
           )}
         </div>
-        <Editor ref={editorRef} content={content} onChange={handleChange} editing={userModified} />
+        <Editor ref={editorRef} content={content} onChange={handleChange} editing={userModified || !loadedNoteId} />
         {userModified && isTyping && (
           <div className="save-hint">
             <kbd>⌘</kbd> + <kbd>Enter</kbd> to save &nbsp; <kbd>Esc</kbd> to

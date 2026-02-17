@@ -17,9 +17,11 @@ function genPanelId() {
   return String(nextPanelId++);
 }
 
+const firstPanelId = genPanelId();
+
 export default function App() {
   const [panels, setPanels] = useState<PanelState[]>(() => [
-    { id: genPanelId() },
+    { id: firstPanelId },
   ]);
   const [panelWidths, setPanelWidths] = useState<number[]>([1]);
   const [activePanelIndex, _setActivePanelIndex] = useState(0);
@@ -32,7 +34,7 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragStartWidths = useRef<number[]>([]);
   const prevActivePanelRef = useRef(0);
-  const pendingFocusPanelId = useRef<string | null>(null);
+  const pendingFocusPanelId = useRef<string | null>(firstPanelId);
 
   const setActivePanelIndex = useCallback((next: number | ((prev: number) => number)) => {
     _setActivePanelIndex((current) => {

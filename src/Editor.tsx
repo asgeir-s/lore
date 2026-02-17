@@ -6,7 +6,7 @@ import {
   useImperativeHandle,
   useState,
 } from "react";
-import { EditorState } from "@codemirror/state";
+import { EditorState, Compartment } from "@codemirror/state";
 import { EditorView, keymap, placeholder, ViewUpdate } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { defaultKeymap } from "@codemirror/commands";
@@ -23,6 +23,7 @@ interface EditorProps {
 
 export interface EditorHandle {
   focus: () => void;
+  blur: () => void;
   clear: () => void;
 }
 
@@ -53,44 +54,26 @@ const editorTheme = EditorView.theme({
   },
 });
 
-const highlightStyle = HighlightStyle.define([
-  {
-    tag: tags.heading1,
-    fontSize: "1.8em",
-    fontWeight: "700",
-    lineHeight: "1.3",
-  },
-  {
-    tag: tags.heading2,
-    fontSize: "1.4em",
-    fontWeight: "600",
-    lineHeight: "1.4",
-  },
-  {
-    tag: tags.heading3,
-    fontSize: "1.15em",
-    fontWeight: "600",
-    lineHeight: "1.5",
-  },
+// Normal mode: styled with subtle formatting hints
+const normalHighlightStyle = HighlightStyle.define([
+  { tag: tags.heading1, fontSize: "1.8em", fontWeight: "700", lineHeight: "1.3" },
+  { tag: tags.heading2, fontSize: "1.4em", fontWeight: "600", lineHeight: "1.4" },
+  { tag: tags.heading3, fontSize: "1.15em", fontWeight: "600", lineHeight: "1.5" },
   { tag: tags.strong, fontWeight: "700" },
   { tag: tags.emphasis, fontStyle: "italic" },
   { tag: tags.strikethrough, textDecoration: "line-through" },
-  {
-    tag: tags.monospace,
-    fontFamily: '"SF Mono", "Fira Code", Menlo, monospace',
-    fontSize: "0.9em",
-    backgroundColor: "var(--surface)",
-    borderRadius: "4px",
-    padding: "2px 6px",
-  },
+  { tag: tags.monospace, fontFamily: '"SF Mono", "Fira Code", Menlo, monospace', fontSize: "0.9em", backgroundColor: "var(--surface)", borderRadius: "4px", padding: "2px 6px" },
   { tag: tags.link, color: "var(--accent)", textDecoration: "underline", cursor: "pointer" },
   { tag: tags.url, color: "var(--accent)", cursor: "pointer" },
   { tag: tags.quote, color: "var(--text-muted)", fontStyle: "italic" },
-  {
-    tag: tags.processingInstruction,
-    color: "var(--text-muted)",
-    fontSize: "0.85em",
-  },
+  { tag: tags.processingInstruction, color: "var(--text-muted)", fontSize: "0.85em" },
+]);
+
+// MD mode: plain raw markdown, no visual formatting
+const rawHighlightStyle = HighlightStyle.define([
+  { tag: tags.link, color: "var(--accent)" },
+  { tag: tags.url, color: "var(--accent)" },
+  { tag: tags.processingInstruction, color: "var(--text-muted)" },
 ]);
 
 function findLinkUrl(view: EditorView, clientX: number, clientY: number): string | null {
@@ -128,9 +111,13 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
     const onChangeRef = useRef(onChange);
     const editingRef = useRef(editing);
     const isSettingContent = useRef(false);
+    const highlightCompartment = useRef(new Compartment());
     const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
+    const [rawMode, setRawMode] = useState(false);
 
     editingRef.current = editing;
+    const [caretHidden, setCaretHidden] = useState(false);
+
     const [slashState, setSlashState] = useState<{
       visible: boolean;
       x: number;
@@ -143,6 +130,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
 
     useImperativeHandle(ref, () => ({
       focus: () => viewRef.current?.focus(),
+      blur: () => viewRef.current?.contentDOM.blur(),
       clear: () => {
         if (viewRef.current) {
           isSettingContent.current = true;
@@ -222,7 +210,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
         extensions: [
           keymap.of(defaultKeymap),
           markdown({ base: markdownLanguage }),
-          syntaxHighlighting(highlightStyle),
+          highlightCompartment.current.of(syntaxHighlighting(normalHighlightStyle)),
           editorTheme,
           placeholder("Write..."),
           updateListener,
@@ -258,12 +246,18 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
         setHoveredUrl(null);
       };
 
+      const handleMouseDown = () => {
+        setCaretHidden(false);
+      };
+
       view.dom.addEventListener("click", handleClick);
+      view.dom.addEventListener("mousedown", handleMouseDown);
       view.dom.addEventListener("mousemove", handleMouseMove);
       view.dom.addEventListener("mouseleave", handleMouseLeave);
 
       return () => {
         view.dom.removeEventListener("click", handleClick);
+        view.dom.removeEventListener("mousedown", handleMouseDown);
         view.dom.removeEventListener("mousemove", handleMouseMove);
         view.dom.removeEventListener("mouseleave", handleMouseLeave);
         view.destroy();
@@ -272,6 +266,30 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
       // Only run on mount
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // Toggle highlight style when raw mode changes
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      const style = rawMode ? rawHighlightStyle : normalHighlightStyle;
+      view.dispatch({
+        effects: highlightCompartment.current.reconfigure(syntaxHighlighting(style)),
+      });
+    }, [rawMode]);
+
+    // Hide caret and blur when entering view mode (note loaded)
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      if (!editing) {
+        setCaretHidden(true);
+        if (view.hasFocus) {
+          view.contentDOM.blur();
+        }
+      } else {
+        setCaretHidden(false);
+      }
+    }, [editing]);
 
     // Sync external content changes to editor
     useEffect(() => {
@@ -295,7 +313,14 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
       : [];
 
     return (
-      <div className="editor-container" ref={containerRef}>
+      <div className={`editor-container ${editing ? "" : "viewing"} ${caretHidden ? "caret-hidden" : ""} ${rawMode ? "raw-mode" : ""}`} ref={containerRef}>
+        <button
+          className="mode-toggle"
+          onClick={() => setRawMode((r) => !r)}
+          title={rawMode ? "Switch to normal mode" : "Switch to markdown mode"}
+        >
+          {rawMode ? "Aa" : "MD"}
+        </button>
         {slashState.visible && filteredCommands.length > 0 && (
           <SlashPalette
             commands={filteredCommands}

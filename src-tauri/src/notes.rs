@@ -169,7 +169,7 @@ pub fn save_note(
 
     let modified = now.to_rfc3339();
     let frontmatter = build_frontmatter(&note_id, &created, &modified, tags, starred);
-    let full_content = format!("{}\n{}", frontmatter, content);
+    let full_content = format!("{}{}", frontmatter, content);
 
     fs::write(&file_path, &full_content)?;
 
@@ -217,7 +217,7 @@ pub fn toggle_star(
     let (_fm, body) = parse_frontmatter(&raw);
 
     let frontmatter = build_frontmatter(&meta.id, &meta.created, &meta.modified, &meta.tags, new_starred);
-    let full_content = format!("{}\n{}", frontmatter, body);
+    let full_content = format!("{}{}", frontmatter, body);
     fs::write(&file_path, &full_content)?;
 
     let updated = NoteMetadata {
