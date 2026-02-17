@@ -19,7 +19,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "$ROOT_DIR"
 
-tauri build --bundles deb
+npm install
+npx tauri build --bundles deb
 
 BUNDLE_DIR="src-tauri/target/release/bundle/deb"
 DEB_PATH="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*.deb' | sort | tail -n 1 || true)"

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { NotePanel } from "./NotePanel";
 import type { PanelHandle } from "./NotePanel";
 import { DragSplitter } from "./DragSplitter";
-import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile, getGitRemote, setGitRemote, dismissGitSetup } from "./api";
+import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile, getGitRemote, setGitRemote, dismissGitSetup, getNotesDir, setNotesDir } from "./api";
 import type { NoteMetadata, SortBy } from "./api";
 import { loadSavedTheme, saveTheme, applyThemeVars } from "./themes";
 import { ThemePicker } from "./ThemePicker";
@@ -20,6 +20,7 @@ function genPanelId() {
 }
 
 const firstPanelId = genPanelId();
+const NOTES_DIR_PROMPT_KEY = "notes-dir-prompted-v1";
 
 function isMacOS(): boolean {
   if (typeof navigator === "undefined") return false;
@@ -43,6 +44,8 @@ export default function App() {
   });
   const [dropZoneVisible, setDropZoneVisible] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [notesDirBanner, setNotesDirBanner] = useState(false);
+  const [notesDirPath, setNotesDirPath] = useState("");
   const [gitBanner, setGitBanner] = useState(false);
   const [gitRemoteUrl, setGitRemoteUrl] = useState("");
   const [gitError, setGitError] = useState<string | null>(null);
@@ -89,6 +92,15 @@ export default function App() {
     }
   }, [sortBy]);
 
+  const checkGitSetup = useCallback(async () => {
+    try {
+      const remote = await getGitRemote();
+      setGitBanner(remote === null);
+    } catch {
+      // Not in Tauri or git not available
+    }
+  }, []);
+
   // Init
   useEffect(() => {
     applyThemeVars(themeId);
@@ -99,17 +111,23 @@ export default function App() {
         // Index rebuild may fail in web-only mode
       }
       await refreshSharedState();
-      // Check if git remote is configured
+
+      // First-run prompt for notes directory (before git setup).
       try {
-        const remote = await getGitRemote();
-        if (remote === null) {
-          setGitBanner(true);
+        const currentNotesDir = await getNotesDir();
+        const promptedNotesDir = localStorage.getItem(NOTES_DIR_PROMPT_KEY) === "1";
+        if (currentNotesDir && !promptedNotesDir) {
+          setNotesDirPath(currentNotesDir);
+          setNotesDirBanner(true);
+          return;
         }
       } catch {
-        // Not in Tauri or git not available
+        // Not in Tauri
       }
+
+      await checkGitSetup();
     };
-    init();
+    void init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -592,6 +610,34 @@ export default function App() {
     dragStartWidths.current = [];
   }, []);
 
+  const handleNotesDirConfirm = useCallback(async () => {
+    const nextDir = notesDirPath.trim();
+    if (!nextDir) return;
+
+    try {
+      const currentDir = await getNotesDir();
+      if (currentDir && currentDir !== nextDir) {
+        await setNotesDir(nextDir);
+        await refreshSharedState();
+      }
+
+      localStorage.setItem(NOTES_DIR_PROMPT_KEY, "1");
+      setNotesDirBanner(false);
+      setGitError(null);
+      await checkGitSetup();
+    } catch (e) {
+      console.error("Failed to set notes directory:", e);
+      setGitError(e instanceof Error ? e.message : String(e));
+      setTimeout(() => setGitError(null), 5000);
+    }
+  }, [notesDirPath, refreshSharedState, checkGitSetup]);
+
+  const handleNotesDirLater = useCallback(() => {
+    localStorage.setItem(NOTES_DIR_PROMPT_KEY, "1");
+    setNotesDirBanner(false);
+    void checkGitSetup();
+  }, [checkGitSetup]);
+
   const handleGitConnect = useCallback(async () => {
     if (!gitRemoteUrl.trim()) return;
     try {
@@ -617,7 +663,21 @@ export default function App() {
 
   return (
     <>
-    {gitBanner && (
+    {notesDirBanner ? (
+      <div className="git-banner">
+        <span>Choose notes folder</span>
+        <input
+          className="git-banner-input"
+          type="text"
+          placeholder="~/notes"
+          value={notesDirPath}
+          onChange={(e) => setNotesDirPath(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") handleNotesDirConfirm(); }}
+        />
+        <button className="git-banner-btn connect" onClick={handleNotesDirConfirm}>Continue</button>
+        <button className="git-banner-btn" onClick={handleNotesDirLater}>Later</button>
+      </div>
+    ) : gitBanner && (
       <div className="git-banner">
         <span>Set up git sync</span>
         <input
