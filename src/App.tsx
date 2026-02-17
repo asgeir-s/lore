@@ -5,6 +5,8 @@ import type { PanelHandle } from "./NotePanel";
 import { DragSplitter } from "./DragSplitter";
 import { listRecentNotes, getAllTags, rebuildIndex } from "./api";
 import type { NoteMetadata, SortBy } from "./api";
+import { loadSavedTheme, saveTheme, applyThemeVars } from "./themes";
+import { ThemePicker } from "./ThemePicker";
 
 interface PanelState {
   id: string;
@@ -29,6 +31,11 @@ export default function App() {
   const [allTags, setAllTags] = useState<string[]>([]);
   const [showHotkeys, setShowHotkeys] = useState(false);
   const [sortBy, setSortBy] = useState<SortBy>("created");
+  const [themeId, setThemeId] = useState(() => loadSavedTheme());
+  const [zoom, setZoom] = useState(() => {
+    const saved = localStorage.getItem("note-zoom");
+    return saved ? Number(saved) : 100;
+  });
 
   const panelRefs = useRef<Map<string, PanelHandle>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
@@ -46,8 +53,21 @@ export default function App() {
     });
   }, []);
 
+  const handleThemeChange = useCallback((id: string) => {
+    setThemeId(id);
+    saveTheme(id);
+    applyThemeVars(id);
+  }, []);
+
+  // Apply zoom
+  useEffect(() => {
+    document.documentElement.style.zoom = `${zoom}%`;
+    localStorage.setItem("note-zoom", String(zoom));
+  }, [zoom]);
+
   // Init
   useEffect(() => {
+    applyThemeVars(themeId);
     const init = async () => {
       try {
         await rebuildIndex();
@@ -57,6 +77,7 @@ export default function App() {
       await refreshSharedState();
     };
     init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Re-fetch when sort order changes
@@ -106,7 +127,7 @@ export default function App() {
   );
 
   const openNoteToRight = useCallback(
-    (panelIndex: number, noteId: string, forceNew: boolean) => {
+    (panelIndex: number, noteId: string, forceNew: boolean, keepFocus?: boolean) => {
       setPanels((prev) => {
         if (forceNew) {
           // Cmd+click: always append to the far right as independent panel
@@ -117,7 +138,7 @@ export default function App() {
           };
           const next = [...prev, newPanel];
           setPanelWidths((w) => [...w, 1]);
-          setActivePanelIndex(next.length - 1);
+          if (!keepFocus) setActivePanelIndex(next.length - 1);
           return next;
         }
 
@@ -133,7 +154,7 @@ export default function App() {
           ) {
             // Right panel is linked and not modified — reuse it
             rightRef.loadNote(noteId);
-            setActivePanelIndex(rightIndex);
+            if (!keepFocus) setActivePanelIndex(rightIndex);
             return prev;
           }
           // Right panel is independent or modified — insert new panel
@@ -148,7 +169,7 @@ export default function App() {
             nw.splice(rightIndex, 0, 1);
             return nw;
           });
-          setActivePanelIndex(rightIndex);
+          if (!keepFocus) setActivePanelIndex(rightIndex);
           return next;
         }
 
@@ -158,7 +179,7 @@ export default function App() {
           initialNoteId: noteId,
         };
         setPanelWidths((w) => [...w, 1]);
-        setActivePanelIndex(rightIndex);
+        if (!keepFocus) setActivePanelIndex(rightIndex);
         return [...prev, newPanel];
       });
     },
@@ -320,10 +341,28 @@ export default function App() {
         setActivePanelIndex(activePanelIndex + 1);
         return;
       }
-      // Cmd++
-      if (e.key === "+" && (e.metaKey || e.ctrlKey)) {
+      // Cmd+Ctrl++
+      if (e.key === "+" && e.metaKey && e.ctrlKey) {
         e.preventDefault();
         setShowHotkeys(true);
+        return;
+      }
+      // Cmd+= or Cmd++ — zoom in
+      if ((e.key === "=" || e.key === "+") && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setZoom((z) => Math.min(200, z + 10));
+        return;
+      }
+      // Cmd+- — zoom out
+      if (e.key === "-" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setZoom((z) => Math.max(50, z - 10));
+        return;
+      }
+      // Cmd+0 — reset zoom
+      if (e.key === "0" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setZoom(100);
         return;
       }
       // Tab to leave the editor and enter list navigation mode
@@ -353,9 +392,19 @@ export default function App() {
           activePanel.openSelectedNote(false);
           return;
         }
+        if (e.key === " ") {
+          e.preventDefault();
+          const noteId = activePanel.getHighlightedNoteId();
+          if (!noteId) return;
+          // If note is already open in another panel, do nothing (it's already visible)
+          if (findPanelWithNote(noteId) !== -1) return;
+          // Always preview to the right without moving focus
+          openNoteToRight(activePanelIndex, noteId, false, true);
+          return;
+        }
       }
     },
-    [panels, activePanelIndex, closePanel, openNewPanelToRight],
+    [panels, activePanelIndex, closePanel, openNewPanelToRight, findPanelWithNote, openNoteToRight],
   );
 
   const handleKeyUp = useCallback(
@@ -409,6 +458,7 @@ export default function App() {
   }, []);
 
   return (
+    <>
     <div className="app-layout" ref={containerRef}>
       {panels.map((panel, index) => (
         <Fragment key={panel.id}>
@@ -436,10 +486,13 @@ export default function App() {
               independent={panel.independent}
               sortBy={sortBy}
               onSortChange={setSortBy}
+              themeId={themeId}
             />
           </div>
         </Fragment>
       ))}
+    </div>
+    <ThemePicker themeId={themeId} onThemeChange={handleThemeChange} />
       {showHotkeys && createPortal(
         <div className="hotkeys-overlay">
           <div className="hotkeys-panel">
@@ -457,12 +510,15 @@ export default function App() {
               <div className="hotkey-row"><kbd>⌘</kbd> <kbd>Click</kbd><span>Open in new panel</span></div>
               <div className="hotkey-row"><kbd>Esc</kbd><span>Discard edits / close panel</span></div>
               <div className="hotkey-row"><kbd>Tab</kbd><span>Exit editor to list</span></div>
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>+</kbd><span>Show shortcuts</span></div>
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>+</kbd><span>Zoom in</span></div>
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>-</kbd><span>Zoom out</span></div>
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>0</kbd><span>Reset zoom</span></div>
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>⌃</kbd> <kbd>+</kbd><span>Show shortcuts</span></div>
             </div>
           </div>
         </div>,
         document.body,
       )}
-    </div>
+    </>
   );
 }

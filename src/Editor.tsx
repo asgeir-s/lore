@@ -13,12 +13,14 @@ import { defaultKeymap } from "@codemirror/commands";
 import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import { SlashPalette, slashCommands } from "./SlashPalette";
+import { themes } from "./themes";
 import { openUrl } from "./api";
 
 interface EditorProps {
   content: string;
   onChange: (value: string) => void;
   editing: boolean;
+  themeId: string;
 }
 
 export interface EditorHandle {
@@ -76,6 +78,17 @@ const rawHighlightStyle = HighlightStyle.define([
   { tag: tags.processingInstruction, color: "var(--text-muted)" },
 ]);
 
+// Structural-only style: heading sizes & bold/italic, but no colors
+// Used when an external theme is active so theme colors show through
+const structuralHighlightStyle = HighlightStyle.define([
+  { tag: tags.heading1, fontSize: "1.8em", fontWeight: "700", lineHeight: "1.3" },
+  { tag: tags.heading2, fontSize: "1.4em", fontWeight: "600", lineHeight: "1.4" },
+  { tag: tags.heading3, fontSize: "1.15em", fontWeight: "600", lineHeight: "1.5" },
+  { tag: tags.strong, fontWeight: "700" },
+  { tag: tags.emphasis, fontStyle: "italic" },
+  { tag: tags.strikethrough, textDecoration: "line-through" },
+]);
+
 function findLinkUrl(view: EditorView, clientX: number, clientY: number): string | null {
   const pos = view.posAtCoords({ x: clientX, y: clientY });
   if (pos === null) return null;
@@ -105,13 +118,14 @@ function findLinkUrl(view: EditorView, clientX: number, clientY: number): string
 }
 
 export const Editor = forwardRef<EditorHandle, EditorProps>(
-  ({ content, onChange, editing }, ref) => {
+  ({ content, onChange, editing, themeId }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const onChangeRef = useRef(onChange);
     const editingRef = useRef(editing);
     const isSettingContent = useRef(false);
     const highlightCompartment = useRef(new Compartment());
+    const themeCompartment = useRef(new Compartment());
     const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
     const [rawMode, setRawMode] = useState(false);
 
@@ -211,7 +225,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
           keymap.of(defaultKeymap),
           markdown({ base: markdownLanguage }),
           highlightCompartment.current.of(syntaxHighlighting(normalHighlightStyle)),
-          editorTheme,
+          themeCompartment.current.of(editorTheme),
           placeholder("Write..."),
           updateListener,
           EditorView.lineWrapping,
@@ -267,15 +281,33 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Toggle highlight style when raw mode changes
+    // Reconfigure highlight style when raw mode or theme changes
     useEffect(() => {
       const view = viewRef.current;
       if (!view) return;
-      const style = rawMode ? rawHighlightStyle : normalHighlightStyle;
+      let style: HighlightStyle;
+      if (rawMode) {
+        style = rawHighlightStyle;
+      } else if (themeId !== "default" && themes[themeId]) {
+        style = structuralHighlightStyle;
+      } else {
+        style = normalHighlightStyle;
+      }
       view.dispatch({
         effects: highlightCompartment.current.reconfigure(syntaxHighlighting(style)),
       });
-    }, [rawMode]);
+    }, [rawMode, themeId]);
+
+    // Reconfigure CodeMirror theme when themeId changes
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      const entry = themes[themeId];
+      const ext = entry ? [entry.extension, editorTheme] : editorTheme;
+      view.dispatch({
+        effects: themeCompartment.current.reconfigure(ext),
+      });
+    }, [themeId]);
 
     // Hide caret and blur when entering view mode (note loaded)
     useEffect(() => {
@@ -312,8 +344,10 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
         )
       : [];
 
+    const isThemed = themeId !== "default" && !!themes[themeId];
+
     return (
-      <div className={`editor-container ${editing ? "" : "viewing"} ${caretHidden ? "caret-hidden" : ""} ${rawMode ? "raw-mode" : ""}`} ref={containerRef}>
+      <div className={`editor-container ${editing ? "" : "viewing"} ${caretHidden ? "caret-hidden" : ""} ${rawMode ? "raw-mode" : ""} ${isThemed ? "themed" : ""}`} ref={containerRef}>
         <button
           className="mode-toggle"
           onClick={() => setRawMode((r) => !r)}

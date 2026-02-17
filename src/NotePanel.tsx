@@ -31,6 +31,7 @@ export interface PanelHandle {
   discardEdits: () => void;
   navigateList: (delta: number) => void;
   openSelectedNote: (metaKey: boolean) => void;
+  getHighlightedNoteId: () => string | null;
   toggleStar: () => Promise<void>;
 }
 
@@ -45,6 +46,7 @@ interface NotePanelProps {
   independent?: boolean;
   sortBy: SortBy;
   onSortChange: (sortBy: SortBy) => void;
+  themeId: string;
 }
 
 export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
@@ -60,6 +62,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       independent,
       sortBy,
       onSortChange,
+      themeId,
     },
     ref,
   ) => {
@@ -87,13 +90,13 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           if (pushHistory) {
             historyRef.current.push(loadedNoteIdRef.current);
           }
+          setRelatedNotes([]);
           const note = await getNote(noteId);
           setContent(note.content);
           setLoadedNoteId(note.id);
           loadedNoteIdRef.current = note.id;
           setTags(note.tags);
           setStarred(note.starred);
-          setRelatedNotes([]);
           setUserModified(false);
           // Remove focus from editor so keystrokes don't go to it.
           editorRef.current?.blur();
@@ -206,6 +209,13 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             setHighlightIndex(-1);
           }
         },
+        getHighlightedNoteId: () => {
+          const notes = isTyping ? relatedNotes : recentNotes;
+          if (highlightIndex >= 0 && highlightIndex < notes.length) {
+            return notes[highlightIndex].id;
+          }
+          return null;
+        },
         toggleStar: async () => {
           if (!loadedNoteId) return;
           try {
@@ -305,13 +315,10 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             </div>
           )}
         </div>
-        <Editor ref={editorRef} content={content} onChange={handleChange} editing={userModified || !loadedNoteId} />
-        {userModified && isTyping && (
-          <div className="save-hint">
-            <kbd>⌘</kbd> + <kbd>Enter</kbd> to save &nbsp; <kbd>Esc</kbd> to
-            discard
-          </div>
-        )}
+        <Editor ref={editorRef} content={content} onChange={handleChange} editing={userModified || !loadedNoteId} themeId={themeId} />
+        <div className="save-hint">
+          <kbd>⌘</kbd> <kbd>⌃</kbd> <kbd>+</kbd> commands
+        </div>
         <NotesList
           notes={displayedNotes}
           label={listLabel}

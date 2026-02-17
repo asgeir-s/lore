@@ -48,7 +48,7 @@ body {
 
 /* Single panel - centered */
 .app-layout .panel-container:only-child {
-  max-width: 680px;
+  max-width: 1000px;
   margin: 0 auto;
   width: 100%;
 }
@@ -198,6 +198,116 @@ body {
 .mode-toggle:hover {
   color: var(--text);
   border-color: var(--text-muted);
+}
+
+/* Theme picker (app-level, fixed bottom-right) */
+.theme-picker {
+  position: fixed;
+  bottom: 12px;
+  right: 12px;
+  z-index: 50;
+}
+
+.theme-picker-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--font);
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.theme-picker-btn:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.theme-dropdown {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+  min-width: 180px;
+  max-height: 400px;
+  overflow-y: auto;
+  z-index: 100;
+}
+
+@media (prefers-color-scheme: dark) {
+  .theme-dropdown {
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  }
+}
+
+.theme-group {
+  padding: 2px 0;
+}
+
+.theme-group + .theme-group {
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+  padding-top: 4px;
+}
+
+.theme-group-label {
+  padding: 4px 10px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.theme-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: var(--font);
+  color: var(--text);
+}
+
+.theme-item:hover {
+  background: var(--surface);
+}
+
+.theme-item.active {
+  background: var(--surface);
+  font-weight: 500;
+}
+
+.theme-check {
+  color: var(--accent);
+  font-size: 14px;
+  margin-left: 8px;
+}
+
+/* Themed editor: let CodeMirror theme control background/colors */
+.editor-container.themed .cm-editor {
+  background: transparent;
+}
+
+.editor-container.themed .cm-editor .cm-content {
+  caret-color: auto;
 }
 
 /* Notes list */
