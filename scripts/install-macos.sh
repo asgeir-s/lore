@@ -10,7 +10,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "$ROOT_DIR"
 
-tauri build --bundles app
+npm install
+npx tauri build --bundles app
 
 APP_SRC="src-tauri/target/release/bundle/macos/Dump.app"
 APP_DST="/Applications/Dump.app"

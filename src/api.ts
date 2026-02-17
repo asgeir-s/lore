@@ -172,6 +172,19 @@ export async function getGitRemote(): Promise<string | null> {
   return null;
 }
 
+export async function getNotesDir(): Promise<string | null> {
+  if (isTauri()) {
+    return invoke<string>("get_notes_dir");
+  }
+  return null;
+}
+
+export async function setNotesDir(path: string): Promise<void> {
+  if (isTauri()) {
+    return invoke<void>("set_notes_dir", { path });
+  }
+}
+
 export async function setGitRemote(url: string): Promise<void> {
   if (isTauri()) {
     return invoke<void>("set_git_remote", { url });

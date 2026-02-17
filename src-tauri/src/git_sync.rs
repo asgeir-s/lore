@@ -836,6 +836,7 @@ pub async fn set_git_remote(
 
 #[tauri::command]
 pub fn dismiss_git_setup(state: State<AppState>) -> Result<(), String> {
-    state.git.dismiss();
+    let git = state.git.lock().map_err(|e| e.to_string())?;
+    git.dismiss();
     Ok(())
 }

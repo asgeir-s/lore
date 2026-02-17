@@ -9,7 +9,7 @@ use tauri::{Manager, RunEvent, State};
 pub struct AppState {
     pub notes_dir: Mutex<String>,
     pub index: Mutex<NoteIndex>,
-    pub git: GitSyncHandle,
+    pub git: Mutex<GitSyncHandle>,
 }
 
 #[tauri::command]
@@ -25,24 +25,30 @@ fn set_notes_dir(
     path: String,
 ) -> Result<(), String> {
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
-    let mut dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
 
     // Flush and shut down the old git worker.
-    state.git.flush_and_push();
-    state.git.shutdown();
+    let old_git = {
+        let git = state.git.lock().map_err(|e| e.to_string())?;
+        git.clone()
+    };
+    old_git.flush_and_push();
+    old_git.shutdown();
 
-    *dir = path.clone();
+    {
+        let mut dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
+        *dir = path.clone();
+    }
 
     // Rebuild index for new directory.
-    let mut index = state.index.lock().map_err(|e| e.to_string())?;
-    *index = notes::rebuild_index(&path).map_err(|e| e.to_string())?;
+    {
+        let mut index = state.index.lock().map_err(|e| e.to_string())?;
+        *index = notes::rebuild_index(&path).map_err(|e| e.to_string())?;
+    }
 
-    // Start a new git worker for the new directory.
-    // Note: we can't replace `state.git` through a shared ref, but the old
-    // worker is shut down and the new handle can be used going forward.
-    // For a full restart, the app would need to be restarted. This is acceptable
-    // since changing notes dir is rare.
-    let _new_git = GitSyncHandle::new(&path, app_handle);
+    // Start and store a new git worker for the new directory.
+    let new_git = GitSyncHandle::new(&path, app_handle);
+    let mut git = state.git.lock().map_err(|e| e.to_string())?;
+    *git = new_git;
 
     Ok(())
 }
@@ -54,14 +60,14 @@ fn save_note(
     content: String,
     tags: Vec<String>,
 ) -> Result<NoteMetadata, String> {
-    let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
     let is_new = id.is_none();
-    let mut index = state.index.lock().map_err(|e| e.to_string())?;
-    let meta = notes::save_note(&dir, id, &content, &tags, &mut index)
-        .map_err(|e| e.to_string())?;
-    state
-        .git
-        .notify_change(&meta.path, &meta.title, is_new);
+    let meta = {
+        let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
+        let mut index = state.index.lock().map_err(|e| e.to_string())?;
+        notes::save_note(&dir, id, &content, &tags, &mut index).map_err(|e| e.to_string())?
+    };
+    let git = state.git.lock().map_err(|e| e.to_string())?;
+    git.notify_change(&meta.path, &meta.title, is_new);
     Ok(meta)
 }
 
@@ -109,10 +115,13 @@ fn get_all_tags(state: State<AppState>) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 fn toggle_star(state: State<AppState>, id: String) -> Result<NoteMetadata, String> {
-    let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
-    let mut index = state.index.lock().map_err(|e| e.to_string())?;
-    let meta = notes::toggle_star(&dir, &id, &mut index).map_err(|e| e.to_string())?;
-    state.git.notify_change(&meta.path, &meta.title, false);
+    let meta = {
+        let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
+        let mut index = state.index.lock().map_err(|e| e.to_string())?;
+        notes::toggle_star(&dir, &id, &mut index).map_err(|e| e.to_string())?
+    };
+    let git = state.git.lock().map_err(|e| e.to_string())?;
+    git.notify_change(&meta.path, &meta.title, false);
     Ok(meta)
 }
 
@@ -121,18 +130,20 @@ fn import_markdown_file(
     state: State<AppState>,
     source_path: String,
 ) -> Result<NoteMetadata, String> {
-    let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
-    let mut index = state.index.lock().map_err(|e| e.to_string())?;
-    let meta =
-        notes::import_markdown_file(&dir, &source_path, &mut index).map_err(|e| e.to_string())?;
-    state.git.notify_change(&meta.path, &meta.title, true);
+    let meta = {
+        let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
+        let mut index = state.index.lock().map_err(|e| e.to_string())?;
+        notes::import_markdown_file(&dir, &source_path, &mut index).map_err(|e| e.to_string())?
+    };
+    let git = state.git.lock().map_err(|e| e.to_string())?;
+    git.notify_change(&meta.path, &meta.title, true);
     Ok(meta)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let home = dirs_home();
-    let default_dir = format!("{}/dump", home);
+    let default_dir = format!("{}/notes", home);
     let _ = std::fs::create_dir_all(&default_dir);
 
     let index = notes::rebuild_index(&default_dir).unwrap_or_default();
@@ -145,7 +156,7 @@ pub fn run() {
             app.manage(AppState {
                 notes_dir: Mutex::new(default_dir),
                 index: Mutex::new(index),
-                git,
+                git: Mutex::new(git),
             });
             Ok(())
         })
@@ -170,7 +181,10 @@ pub fn run() {
     app.run(|handle, event| {
         if let RunEvent::ExitRequested { .. } = &event {
             let state: State<AppState> = handle.state();
-            state.git.flush_and_push();
+            if let Ok(git) = state.git.lock() {
+                let git = git.clone();
+                git.flush_and_push();
+            }
         }
     });
 }
