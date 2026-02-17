@@ -12,7 +12,9 @@ pub struct NoteMetadata {
     pub path: String,
     pub title: String,
     pub created: String,
+    pub modified: String,
     pub tags: Vec<String>,
+    pub starred: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +24,8 @@ pub struct NoteContent {
     pub content: String,
     pub tags: Vec<String>,
     pub created: String,
+    pub modified: String,
+    pub starred: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -34,7 +38,9 @@ pub struct NoteIndex {
 struct Frontmatter {
     id: Option<String>,
     created: Option<String>,
+    modified: Option<String>,
     tags: Option<Vec<String>>,
+    starred: Option<bool>,
 }
 
 /// Parse frontmatter and body from markdown content
@@ -98,8 +104,8 @@ fn slugify(title: &str) -> String {
 }
 
 /// Build frontmatter string
-fn build_frontmatter(id: &str, created: &str, tags: &[String]) -> String {
-    let mut fm = format!("---\nid: {}\ncreated: {}\n", id, created);
+fn build_frontmatter(id: &str, created: &str, modified: &str, tags: &[String], starred: bool) -> String {
+    let mut fm = format!("---\nid: {}\ncreated: {}\nmodified: {}\n", id, created, modified);
     if !tags.is_empty() {
         fm.push_str("tags: [");
         fm.push_str(
@@ -110,6 +116,9 @@ fn build_frontmatter(id: &str, created: &str, tags: &[String]) -> String {
                 .join(", "),
         );
         fm.push_str("]\n");
+    }
+    if starred {
+        fm.push_str("starred: true\n");
     }
     fm.push_str("---\n");
     fm
@@ -126,6 +135,7 @@ pub fn save_note(
     let now: DateTime<Local> = Local::now();
     let note_id: String;
     let created: String;
+    let starred: bool;
     let file_path: PathBuf;
 
     let title = extract_title(content);
@@ -133,12 +143,14 @@ pub fn save_note(
     if let Some(existing_id) = id {
         // Update existing note
         note_id = existing_id.clone();
-        // Find existing metadata to preserve created date
+        // Find existing metadata to preserve created date and starred
         if let Some(existing) = index.notes.get(&existing_id) {
             created = existing.created.clone();
+            starred = existing.starred;
             file_path = Path::new(notes_dir).join(&existing.path);
         } else {
             created = now.to_rfc3339();
+            starred = false;
             let timestamp = now.format("%Y%m%d%H%M%S").to_string();
             let slug = slugify(&title);
             let filename = format!("{}-{}.md", timestamp, slug);
@@ -148,13 +160,15 @@ pub fn save_note(
         // New note
         note_id = Uuid::new_v4().to_string();
         created = now.to_rfc3339();
+        starred = false;
         let timestamp = now.format("%Y%m%d%H%M%S").to_string();
         let slug = slugify(&title);
         let filename = format!("{}-{}.md", timestamp, slug);
         file_path = Path::new(notes_dir).join(&filename);
     }
 
-    let frontmatter = build_frontmatter(&note_id, &created, tags);
+    let modified = now.to_rfc3339();
+    let frontmatter = build_frontmatter(&note_id, &created, &modified, tags, starred);
     let full_content = format!("{}\n{}", frontmatter, content);
 
     fs::write(&file_path, &full_content)?;
@@ -170,7 +184,9 @@ pub fn save_note(
         path: filename,
         title,
         created,
+        modified,
         tags: tags.to_vec(),
+        starred,
     };
 
     index.notes.insert(note_id, meta.clone());
@@ -179,6 +195,40 @@ pub fn save_note(
     save_index(notes_dir, index)?;
 
     Ok(meta)
+}
+
+/// Toggle the starred state of a note
+pub fn toggle_star(
+    notes_dir: &str,
+    id: &str,
+    index: &mut NoteIndex,
+) -> io::Result<NoteMetadata> {
+    let meta = index
+        .notes
+        .get(id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?
+        .clone();
+
+    let new_starred = !meta.starred;
+
+    // Read the file and rewrite frontmatter
+    let file_path = Path::new(notes_dir).join(&meta.path);
+    let raw = fs::read_to_string(&file_path)?;
+    let (_fm, body) = parse_frontmatter(&raw);
+
+    let frontmatter = build_frontmatter(&meta.id, &meta.created, &meta.modified, &meta.tags, new_starred);
+    let full_content = format!("{}\n{}", frontmatter, body);
+    fs::write(&file_path, &full_content)?;
+
+    let updated = NoteMetadata {
+        starred: new_starred,
+        ..meta
+    };
+
+    index.notes.insert(id.to_string(), updated.clone());
+    save_index(notes_dir, index)?;
+
+    Ok(updated)
 }
 
 /// Get a note by ID
@@ -198,6 +248,8 @@ pub fn get_note(notes_dir: &str, id: &str, index: &NoteIndex) -> io::Result<Note
         content: body,
         tags: meta.tags.clone(),
         created: meta.created.clone(),
+        modified: meta.modified.clone(),
+        starred: meta.starred,
     })
 }
 
@@ -309,12 +361,16 @@ pub fn rebuild_index(notes_dir: &str) -> io::Result<NoteIndex> {
                             .unwrap_or_default()
                             .to_string_lossy()
                             .to_string();
+                        let created = fm.created.unwrap_or_default();
+                        let modified = fm.modified.unwrap_or_else(|| created.clone());
                         let meta = NoteMetadata {
                             id: id.clone(),
                             path: filename,
                             title,
-                            created: fm.created.unwrap_or_default(),
+                            created,
+                            modified,
                             tags: fm.tags.unwrap_or_default(),
+                            starred: fm.starred.unwrap_or(false),
                         };
                         index.notes.insert(id, meta);
                     }

@@ -1,35 +1,49 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { Editor } from "./Editor";
-import { NotesList } from "./NotesList";
-import { TagInput } from "./TagInput";
-import { SidePanel } from "./SidePanel";
-import {
-  saveNote,
-  getNote,
-  listRecentNotes,
-  searchNotes,
-  getAllTags,
-  rebuildIndex,
-} from "./api";
+import { useState, useEffect, useCallback, useRef, Fragment } from "react";
+import { createPortal } from "react-dom";
+import { NotePanel } from "./NotePanel";
+import type { PanelHandle } from "./NotePanel";
+import { DragSplitter } from "./DragSplitter";
+import { listRecentNotes, getAllTags, rebuildIndex } from "./api";
 import type { NoteMetadata } from "./api";
 
+interface PanelState {
+  id: string;
+  initialNoteId?: string;
+  independent?: boolean;
+}
+
+let nextPanelId = 1;
+function genPanelId() {
+  return String(nextPanelId++);
+}
+
 export default function App() {
-  const [content, setContent] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [tags, setTags] = useState<string[]>([]);
-  const [showTagInput, setShowTagInput] = useState(false);
+  const [panels, setPanels] = useState<PanelState[]>(() => [
+    { id: genPanelId() },
+  ]);
+  const [panelWidths, setPanelWidths] = useState<number[]>([1]);
+  const [activePanelIndex, _setActivePanelIndex] = useState(0);
   const [recentNotes, setRecentNotes] = useState<NoteMetadata[]>([]);
-  const [relatedNotes, setRelatedNotes] = useState<NoteMetadata[]>([]);
   const [allTags, setAllTags] = useState<string[]>([]);
-  const [sidePanelNoteId, setSidePanelNoteId] = useState<string | null>(null);
-  const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const editorRef = useRef<{ focus: () => void; clear: () => void } | null>(
-    null,
-  );
+  const [showHotkeys, setShowHotkeys] = useState(false);
 
-  const isTyping = content.trim().length > 0;
+  const panelRefs = useRef<Map<string, PanelHandle>>(new Map());
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dragStartWidths = useRef<number[]>([]);
+  const prevActivePanelRef = useRef(0);
+  const pendingFocusPanelId = useRef<string | null>(null);
 
-  // Load recent notes and rebuild index on launch
+  const setActivePanelIndex = useCallback((next: number | ((prev: number) => number)) => {
+    _setActivePanelIndex((current) => {
+      const nextVal = typeof next === "function" ? next(current) : next;
+      if (nextVal !== current) {
+        prevActivePanelRef.current = current;
+      }
+      return nextVal;
+    });
+  }, []);
+
+  // Init
   useEffect(() => {
     const init = async () => {
       try {
@@ -37,196 +51,407 @@ export default function App() {
       } catch {
         // Index rebuild may fail in web-only mode
       }
-      await refreshRecentNotes();
-      await refreshTags();
+      await refreshSharedState();
     };
     init();
   }, []);
 
-  const refreshRecentNotes = async () => {
+  const refreshSharedState = useCallback(async () => {
     try {
-      const notes = await listRecentNotes(20);
+      const [notes, tags] = await Promise.all([
+        listRecentNotes(20),
+        getAllTags(),
+      ]);
       setRecentNotes(notes);
+      setAllTags(tags);
     } catch {
       // Ignore errors
     }
-  };
+  }, []);
 
-  const refreshTags = async () => {
-    try {
-      const t = await getAllTags();
-      setAllTags(t);
-    } catch {
-      // Ignore errors
-    }
-  };
-
-  // Debounced search when typing
-  useEffect(() => {
-    if (searchTimeout.current) {
-      clearTimeout(searchTimeout.current);
-    }
-
-    if (!isTyping) {
-      setRelatedNotes([]);
-      return;
-    }
-
-    searchTimeout.current = setTimeout(async () => {
-      try {
-        // Extract search terms from content
-        const lines = content.split("\n").filter((l) => l.trim());
-        const searchText =
-          lines.length > 0 ? lines[lines.length - 1].trim() : "";
-        if (searchText.length < 2) return;
-
-        const results = await searchNotes(searchText);
-        // Filter out the currently editing note
-        const filtered = editingId
-          ? results.filter((n) => n.id !== editingId)
-          : results;
-        setRelatedNotes(filtered);
-      } catch {
-        // Ignore search errors
+  const setPanelRef = useCallback(
+    (panelId: string) => (handle: PanelHandle | null) => {
+      if (handle) {
+        panelRefs.current.set(panelId, handle);
+        if (pendingFocusPanelId.current === panelId) {
+          pendingFocusPanelId.current = null;
+          // Delay slightly so the panel fully mounts
+          requestAnimationFrame(() => handle.focusEditor());
+        }
+      } else {
+        panelRefs.current.delete(panelId);
       }
-    }, 500);
+    },
+    [],
+  );
 
-    return () => {
-      if (searchTimeout.current) {
-        clearTimeout(searchTimeout.current);
+  // Find which panel (by index) already has a note open
+  const findPanelWithNote = useCallback(
+    (noteId: string): number => {
+      for (let i = 0; i < panels.length; i++) {
+        const ref = panelRefs.current.get(panels[i].id);
+        if (ref && ref.getLoadedNoteId() === noteId) return i;
       }
-    };
-  }, [content, editingId, isTyping]);
+      return -1;
+    },
+    [panels],
+  );
 
-  const handleSave = useCallback(async () => {
-    if (!content.trim()) return;
-
-    try {
-      await saveNote(editingId, content, tags);
-      setContent("");
-      setEditingId(null);
-      setTags([]);
-      setRelatedNotes([]);
-      setShowTagInput(false);
-      setSidePanelNoteId(null);
-      editorRef.current?.clear();
-      await refreshRecentNotes();
-      await refreshTags();
-    } catch (e) {
-      console.error("Failed to save note:", e);
-    }
-  }, [content, editingId, tags]);
-
-  const handleOpenNote = useCallback(
-    async (noteId: string) => {
-      try {
-        // If editing or composing, open the linked note in the side panel
-        if (editingId || content.trim()) {
-          setSidePanelNoteId(noteId);
-          return;
+  const openNoteToRight = useCallback(
+    (panelIndex: number, noteId: string, forceNew: boolean) => {
+      setPanels((prev) => {
+        if (forceNew) {
+          // Cmd+click: always append to the far right as independent panel
+          const newPanel: PanelState = {
+            id: genPanelId(),
+            initialNoteId: noteId,
+            independent: true,
+          };
+          const next = [...prev, newPanel];
+          setPanelWidths((w) => [...w, 1]);
+          setActivePanelIndex(next.length - 1);
+          return next;
         }
 
-        const note = await getNote(noteId);
-        setContent(note.content);
-        setEditingId(note.id);
-        setTags(note.tags);
-        setRelatedNotes([]);
-        editorRef.current?.focus();
-      } catch (e) {
-        console.error("Failed to open note:", e);
-      }
+        const rightIndex = panelIndex + 1;
+
+        if (rightIndex < prev.length) {
+          const rightPanel = prev[rightIndex];
+          const rightRef = panelRefs.current.get(rightPanel.id);
+          if (
+            rightRef &&
+            !rightPanel.independent &&
+            !rightRef.isUserModified()
+          ) {
+            // Right panel is linked and not modified — reuse it
+            rightRef.loadNote(noteId);
+            setActivePanelIndex(rightIndex);
+            return prev;
+          }
+          // Right panel is independent or modified — insert new panel
+          const newPanel: PanelState = {
+            id: genPanelId(),
+            initialNoteId: noteId,
+          };
+          const next = [...prev];
+          next.splice(rightIndex, 0, newPanel);
+          setPanelWidths((w) => {
+            const nw = [...w];
+            nw.splice(rightIndex, 0, 1);
+            return nw;
+          });
+          setActivePanelIndex(rightIndex);
+          return next;
+        }
+
+        // No panel to the right — create one
+        const newPanel: PanelState = {
+          id: genPanelId(),
+          initialNoteId: noteId,
+        };
+        setPanelWidths((w) => [...w, 1]);
+        setActivePanelIndex(rightIndex);
+        return [...prev, newPanel];
+      });
     },
-    [content, editingId, tags],
+    [],
   );
 
-  const handleClear = useCallback(() => {
-    setContent("");
-    setEditingId(null);
-    setTags([]);
-    setRelatedNotes([]);
-    setShowTagInput(false);
-    setSidePanelNoteId(null);
-    editorRef.current?.clear();
+  const openNewPanelToRight = useCallback(() => {
+    const newId = genPanelId();
+    pendingFocusPanelId.current = newId;
+    setPanels((prev) => {
+      const newPanel: PanelState = { id: newId, independent: true };
+      const next = [...prev, newPanel];
+      setPanelWidths((w) => [...w, 1]);
+      setActivePanelIndex(next.length - 1);
+      return next;
+    });
   }, []);
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      // Cmd+Enter or Ctrl+Enter to save
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        handleSave();
+  const handleNoteClick = useCallback(
+    (panelIndex: number, noteId: string, metaKey: boolean) => {
+      // If note is already open in any panel, just focus that panel
+      const existingIndex = findPanelWithNote(noteId);
+      if (existingIndex !== -1) {
+        setActivePanelIndex(existingIndex);
         return;
       }
-      // Escape to clear
-      if (e.key === "Escape") {
-        e.preventDefault();
-        handleClear();
-        return;
-      }
-      // Cmd+T or Ctrl+T for tags
-      if (e.key === "t" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        setShowTagInput((prev) => !prev);
-        return;
+
+      const panelRef = panelRefs.current.get(panels[panelIndex]?.id);
+
+      if (metaKey) {
+        openNoteToRight(panelIndex, noteId, true);
+      } else if (panelRef && panelRef.isUserModified()) {
+        openNoteToRight(panelIndex, noteId, false);
+      } else if (panelRef) {
+        panelRef.loadNote(noteId);
       }
     },
-    [handleSave, handleClear],
+    [panels, findPanelWithNote, openNoteToRight],
+  );
+
+  const closePanel = useCallback((index: number, focusIndex?: number) => {
+    setPanels((prev) => {
+      if (prev.length <= 1) return prev;
+      const next = prev.filter((_, i) => i !== index);
+      setPanelWidths((w) => w.filter((_, i) => i !== index));
+      if (focusIndex !== undefined) {
+        // Adjust the requested focus index for the removed panel
+        let adjusted = focusIndex;
+        if (focusIndex > index) adjusted--;
+        setActivePanelIndex(Math.min(adjusted, next.length - 1));
+      } else {
+        setActivePanelIndex((active) => {
+          if (active >= next.length) return next.length - 1;
+          if (active > index) return active - 1;
+          return active;
+        });
+      }
+      return next;
+    });
+  }, [setActivePanelIndex]);
+
+  // Keyboard shortcuts
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      const activePanel = panelRefs.current.get(
+        panels[activePanelIndex]?.id,
+      );
+      if (!activePanel) return;
+
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        if (!activePanel.isUserModified()) {
+          activePanel.openSelectedNote(true);
+        } else {
+          activePanel.save();
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (activePanel.isUserModified()) {
+          // Discard edits but keep panel open
+          activePanel.discardEdits();
+        } else {
+          activePanel.clear();
+          // If not leftmost and now empty, close it
+          if (activePanelIndex > 0) {
+            closePanel(activePanelIndex);
+          }
+        }
+        return;
+      }
+      if (e.key === "t" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        activePanel.toggleTags();
+        return;
+      }
+      if (e.key === "n" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        if (activePanel.isUserModified()) {
+          openNewPanelToRight();
+        } else {
+          activePanel.clear();
+          activePanel.focusEditor();
+        }
+        return;
+      }
+      if (
+        e.key === "Backspace" &&
+        (e.metaKey || e.ctrlKey) &&
+        activePanel.canGoBack()
+      ) {
+        e.preventDefault();
+        activePanel.goBack();
+        return;
+      }
+      if (e.key === "w" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        if (panels.length <= 1) return;
+        const lastIndex = panels.length - 1;
+        const lastPanel = panelRefs.current.get(panels[lastIndex].id);
+        const restoreTo = prevActivePanelRef.current;
+        if (lastPanel) {
+          if (lastPanel.isUserModified()) {
+            lastPanel.save().then(() => closePanel(lastIndex, restoreTo));
+          } else {
+            closePanel(lastIndex, restoreTo);
+          }
+        }
+        return;
+      }
+      // Cmd+S — toggle star on current note
+      if (e.key === "s" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        activePanel.toggleStar();
+        return;
+      }
+      // Cmd+E — edit current note
+      if (e.key === "e" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        activePanel.edit();
+        return;
+      }
+      // Cmd+H — focus left panel
+      if (e.key === "h" && (e.metaKey || e.ctrlKey) && activePanelIndex > 0) {
+        e.preventDefault();
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+        setActivePanelIndex(activePanelIndex - 1);
+        return;
+      }
+      // Cmd+L — focus right panel
+      if (e.key === "l" && (e.metaKey || e.ctrlKey) && activePanelIndex < panels.length - 1) {
+        e.preventDefault();
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+        setActivePanelIndex(activePanelIndex + 1);
+        return;
+      }
+      // Cmd++
+      if (e.key === "+" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setShowHotkeys(true);
+        return;
+      }
+      // Tab to leave the editor and enter list navigation mode
+      const editorFocused = !!document.activeElement?.closest(".cm-editor");
+      if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && editorFocused) {
+        e.preventDefault();
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+        activePanel.navigateList(1);
+        return;
+      }
+      // J/K/ArrowDown/ArrowUp and Enter for list navigation (only when not editing and editor not focused)
+      if (!e.metaKey && !e.ctrlKey && !editorFocused) {
+        if (e.key === "j" || e.key === "ArrowDown") {
+          e.preventDefault();
+          activePanel.navigateList(1);
+          return;
+        }
+        if (e.key === "k" || e.key === "ArrowUp") {
+          e.preventDefault();
+          activePanel.navigateList(-1);
+          return;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          activePanel.openSelectedNote(false);
+          return;
+        }
+      }
+    },
+    [panels, activePanelIndex, closePanel, openNewPanelToRight],
+  );
+
+  const handleKeyUp = useCallback(
+    (e: KeyboardEvent) => {
+      // Hide hotkeys when Meta/Ctrl is released
+      if (e.key === "Meta" || e.key === "Control") {
+        setShowHotkeys(false);
+      }
+    },
+    [],
   );
 
   useEffect(() => {
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleKeyDown]);
+    // Use capture phase so Backspace is intercepted before CodeMirror
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, [handleKeyDown, handleKeyUp]);
 
-  const displayedNotes = isTyping ? relatedNotes : recentNotes;
-  const listLabel = isTyping ? "Related" : "Recent";
+  // Drag splitter handling
+  const handleDrag = useCallback(
+    (index: number, deltaX: number) => {
+      if (dragStartWidths.current.length === 0) {
+        dragStartWidths.current = [...panelWidths];
+      }
+      const container = containerRef.current;
+      if (!container) return;
+      const totalWidth = container.clientWidth;
+      const startWidths = dragStartWidths.current;
+      const totalFlex = startWidths.reduce((a, b) => a + b, 0);
+      const deltaFlex = (deltaX / totalWidth) * totalFlex;
 
-  const handleCloseSidePanel = useCallback(() => {
-    setSidePanelNoteId(null);
-  }, []);
+      const left = Math.max(0.15, startWidths[index] + deltaFlex);
+      const right = Math.max(0.15, startWidths[index + 1] - deltaFlex);
 
-  const handleSidePanelRefresh = useCallback(async () => {
-    await refreshRecentNotes();
-    await refreshTags();
+      setPanelWidths((w) => {
+        const nw = [...w];
+        nw[index] = left;
+        nw[index + 1] = right;
+        return nw;
+      });
+    },
+    [panelWidths],
+  );
+
+  const handleDragEnd = useCallback(() => {
+    dragStartWidths.current = [];
   }, []);
 
   return (
-    <div className={`app-layout ${sidePanelNoteId ? "with-side-panel" : ""}`}>
-      <div className="app">
-        {showTagInput && (
-          <TagInput
-            tags={tags}
-            allTags={allTags}
-            onChange={setTags}
-          />
-        )}
-        {(editingId || isTyping) && (
-          <div className="editing-indicator" role="status" aria-live="polite">Editing</div>
-        )}
-        <Editor
-          ref={editorRef}
-          content={content}
-          onChange={setContent}
-        />
-        {isTyping && (
-          <div className="save-hint">
-            <kbd>⌘</kbd> + <kbd>Enter</kbd> to save &nbsp; <kbd>Esc</kbd> to
-            discard
+    <div className="app-layout" ref={containerRef}>
+      {panels.map((panel, index) => (
+        <Fragment key={panel.id}>
+          {index > 0 && (
+            <DragSplitter
+              onDrag={(delta) => handleDrag(index - 1, delta)}
+              onDragEnd={handleDragEnd}
+            />
+          )}
+          <div
+            className="panel-container"
+            style={{ flex: panelWidths[index] }}
+          >
+            <NotePanel
+              ref={setPanelRef(panel.id)}
+              recentNotes={recentNotes}
+              allTags={allTags}
+              onNoteClick={(noteId, metaKey) =>
+                handleNoteClick(index, noteId, metaKey)
+              }
+              onSaved={refreshSharedState}
+              onFocus={() => setActivePanelIndex(index)}
+              isFocused={activePanelIndex === index}
+              initialNoteId={panel.initialNoteId}
+              independent={panel.independent}
+            />
           </div>
-        )}
-        <NotesList
-          notes={displayedNotes}
-          label={listLabel}
-          onOpenNote={handleOpenNote}
-        />
-      </div>
-      {sidePanelNoteId && (
-        <SidePanel
-          noteId={sidePanelNoteId}
-          parentNoteId={editingId}
-          onClose={handleCloseSidePanel}
-          onRefresh={handleSidePanelRefresh}
-        />
+        </Fragment>
+      ))}
+      {showHotkeys && createPortal(
+        <div className="hotkeys-overlay">
+          <div className="hotkeys-panel">
+            <div className="hotkeys-title">Keyboard Shortcuts</div>
+            <div className="hotkeys-list">
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>Enter</kbd><span>Save note</span></div>
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>N</kbd><span>New note</span></div>
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>E</kbd><span>Edit note</span></div>
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>S</kbd><span>Star note</span></div>
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>T</kbd><span>Toggle tags</span></div>
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>⌫</kbd><span>Go back</span></div>
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>H</kbd><span>Focus left panel</span></div>
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>L</kbd><span>Focus right panel</span></div>
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>W</kbd><span>Close rightmost panel</span></div>
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>Click</kbd><span>Open in new panel</span></div>
+              <div className="hotkey-row"><kbd>Esc</kbd><span>Discard edits / close panel</span></div>
+              <div className="hotkey-row"><kbd>Tab</kbd><span>Exit editor to list</span></div>
+              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>+</kbd><span>Show shortcuts</span></div>
+            </div>
+          </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

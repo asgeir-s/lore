@@ -74,6 +74,13 @@ fn get_all_tags(state: State<AppState>) -> Result<Vec<String>, String> {
     Ok(notes::get_all_tags(&index))
 }
 
+#[tauri::command]
+fn toggle_star(state: State<AppState>, id: String) -> Result<NoteMetadata, String> {
+    let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
+    let mut index = state.index.lock().map_err(|e| e.to_string())?;
+    notes::toggle_star(&dir, &id, &mut index).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let home = dirs_home();
@@ -97,6 +104,7 @@ pub fn run() {
             search_notes,
             rebuild_index,
             get_all_tags,
+            toggle_star,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

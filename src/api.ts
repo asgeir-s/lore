@@ -5,7 +5,9 @@ export interface NoteMetadata {
   path: string;
   title: string;
   created: string;
+  modified: string;
   tags: string[];
+  starred: boolean;
 }
 
 export interface NoteContent {
@@ -14,6 +16,8 @@ export interface NoteContent {
   content: string;
   tags: string[];
   created: string;
+  modified: string;
+  starred: boolean;
 }
 
 /** Check if we're running inside Tauri */
@@ -44,12 +48,16 @@ export async function saveNote(
   // Fallback for web dev
   const noteId = id ?? generateId();
   const title = extractTitle(content);
+  const now = new Date().toISOString();
+  const existing = memoryNotes.get(noteId);
   const meta: NoteMetadata = {
     id: noteId,
     path: `${noteId}.md`,
     title,
-    created: new Date().toISOString(),
+    created: existing?.meta.created ?? now,
+    modified: now,
     tags,
+    starred: existing?.meta.starred ?? false,
   };
   memoryNotes.set(noteId, { meta, content });
   return meta;
@@ -67,6 +75,8 @@ export async function getNote(id: string): Promise<NoteContent> {
     content: note.content,
     tags: note.meta.tags,
     created: note.meta.created,
+    modified: note.meta.modified,
+    starred: note.meta.starred,
   };
 }
 
@@ -110,6 +120,16 @@ export async function getAllTags(): Promise<string[]> {
     }
   }
   return Array.from(tags).sort();
+}
+
+export async function toggleStar(id: string): Promise<NoteMetadata> {
+  if (isTauri()) {
+    return invoke<NoteMetadata>("toggle_star", { id });
+  }
+  const note = memoryNotes.get(id);
+  if (!note) throw new Error("Note not found");
+  note.meta.starred = !note.meta.starred;
+  return note.meta;
 }
 
 export async function rebuildIndex(): Promise<void> {

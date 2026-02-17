@@ -1,9 +1,11 @@
+import { useEffect, useRef } from "react";
 import type { NoteMetadata } from "./api";
 
 interface NotesListProps {
   notes: NoteMetadata[];
   label: string;
-  onOpenNote: (id: string) => void;
+  onOpenNote: (id: string, metaKey: boolean) => void;
+  highlightIndex?: number;
 }
 
 function relativeTime(dateStr: string): string {
@@ -23,20 +25,27 @@ function relativeTime(dateStr: string): string {
   return date.toLocaleDateString();
 }
 
-export function NotesList({ notes, label, onOpenNote }: NotesListProps) {
+export function NotesList({ notes, label, onOpenNote, highlightIndex = -1 }: NotesListProps) {
+  const highlightRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    highlightRef.current?.scrollIntoView({ block: "nearest" });
+  }, [highlightIndex]);
+
   if (notes.length === 0) return null;
 
   return (
     <div className="notes-list">
       <div className="notes-list-header">{label}</div>
-      {notes.map((note) => (
+      {notes.map((note, i) => (
         <button
           key={note.id}
-          className="note-item"
-          onClick={() => onOpenNote(note.id)}
+          ref={i === highlightIndex ? highlightRef : undefined}
+          className={`note-item ${i === highlightIndex ? "highlighted" : ""}`}
+          onClick={(e) => onOpenNote(note.id, e.metaKey)}
         >
-          <span className="note-item-title">{note.title}</span>
-          <span className="note-item-time">{relativeTime(note.created)}</span>
+          <span className="note-item-title">{note.starred && <span className="note-item-star">{"\u2605"}</span>}{note.title}</span>
+          <span className="note-item-time">{relativeTime(note.modified)}</span>
         </button>
       ))}
     </div>
