@@ -1,8 +1,10 @@
 mod git_sync;
 mod notes;
+mod qmd;
 
 use git_sync::GitSyncHandle;
 use notes::{NoteIndex, NoteMetadata};
+use qmd::QmdHandle;
 use std::sync::Mutex;
 use tauri::{Manager, RunEvent, State};
 
@@ -10,6 +12,7 @@ pub struct AppState {
     pub notes_dir: Mutex<String>,
     pub index: Mutex<NoteIndex>,
     pub git: Mutex<GitSyncHandle>,
+    pub qmd: Mutex<QmdHandle>,
 }
 
 #[tauri::command]
@@ -34,6 +37,11 @@ fn set_notes_dir(
     old_git.flush_and_push();
     old_git.shutdown();
 
+    // Shut down the old qmd worker.
+    if let Ok(old_qmd) = state.qmd.lock() {
+        old_qmd.shutdown();
+    }
+
     {
         let mut dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
         *dir = path.clone();
@@ -46,9 +54,14 @@ fn set_notes_dir(
     }
 
     // Start and store a new git worker for the new directory.
-    let new_git = GitSyncHandle::new(&path, app_handle);
+    let new_git = GitSyncHandle::new(&path, app_handle.clone());
     let mut git = state.git.lock().map_err(|e| e.to_string())?;
     *git = new_git;
+
+    // Start a new qmd worker for the new directory.
+    let new_qmd = QmdHandle::new(&path, app_handle);
+    let mut qmd = state.qmd.lock().map_err(|e| e.to_string())?;
+    *qmd = new_qmd;
 
     Ok(())
 }
@@ -68,6 +81,9 @@ fn save_note(
     };
     let git = state.git.lock().map_err(|e| e.to_string())?;
     git.notify_change(&meta.path, &meta.title, is_new);
+    if let Ok(qmd) = state.qmd.lock() {
+        qmd.notify_change(&meta.id, &meta.title);
+    }
     Ok(meta)
 }
 
@@ -83,6 +99,9 @@ fn delete_note(state: State<AppState>, id: String) -> Result<(), String> {
     if let Some(path) = path {
         let git = state.git.lock().map_err(|e| e.to_string())?;
         git.notify_change(&path, "deleted", false);
+    }
+    if let Ok(qmd) = state.qmd.lock() {
+        qmd.notify_delete(&id);
     }
     Ok(())
 }
@@ -168,11 +187,13 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let handle = app.handle().clone();
-            let git = GitSyncHandle::new(&default_dir, handle);
+            let git = GitSyncHandle::new(&default_dir, handle.clone());
+            let qmd = QmdHandle::new(&default_dir, handle);
             app.manage(AppState {
                 notes_dir: Mutex::new(default_dir),
                 index: Mutex::new(index),
                 git: Mutex::new(git),
+                qmd: Mutex::new(qmd),
             });
             Ok(())
         })
@@ -191,17 +212,23 @@ pub fn run() {
             git_sync::get_git_remote,
             git_sync::set_git_remote,
             git_sync::dismiss_git_setup,
+            qmd::get_related_notes,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
     app.run(|handle, event| {
         if let RunEvent::ExitRequested { .. } = &event {
-            let state: State<AppState> = handle.state();
-            if let Ok(git) = state.git.lock() {
-                let git = git.clone();
+            let state = handle.state::<AppState>();
+            let git = state.git.lock().ok().map(|g| g.clone());
+            let qmd = state.qmd.lock().ok().map(|q| q.clone());
+            drop(state);
+            if let Some(git) = git {
                 git.flush_and_push();
-            };
+            }
+            if let Some(qmd) = qmd {
+                qmd.shutdown();
+            }
         }
     });
 }

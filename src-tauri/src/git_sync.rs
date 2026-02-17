@@ -199,8 +199,9 @@ async fn commit_pending_changes(dir: &Path, pending: &mut Vec<FileChange>) -> Re
         }
     }
 
-    // Also stage the index file.
+    // Also stage the index and related-cache files.
     let _ = git(dir, &["add", ".dump-index.json"]).await;
+    let _ = git(dir, &["add", ".dump-related.json"]).await;
 
     // Check if there's actually anything staged.
     let diff = git(dir, &["diff", "--cached", "--quiet"]).await;

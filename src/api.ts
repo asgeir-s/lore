@@ -251,6 +251,13 @@ export async function dismissGitSetup(): Promise<void> {
   }
 }
 
+export async function getRelatedNotes(id: string): Promise<NoteMetadata[]> {
+  if (isTauri()) {
+    return invoke<NoteMetadata[]>("get_related_notes", { id });
+  }
+  return [];
+}
+
 function extractTitle(content: string): string {
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
