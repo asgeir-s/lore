@@ -59,7 +59,7 @@ export function NotesList({ notes, label, onOpenNote, highlightIndex = -1, sortB
             <button
               ref={i === highlightIndex ? highlightRef : undefined}
               className={`note-item ${i === highlightIndex ? "highlighted" : ""}`}
-              onClick={(e) => onOpenNote(note.id, e.metaKey)}
+              onClick={(e) => onOpenNote(note.id, e.metaKey || e.ctrlKey)}
             >
               <span className="note-item-title">{note.starred && <span className="note-item-star">{"\u2605"}</span>}{note.title}</span>
               <span className="note-item-time">{relativeTime(sortBy === "modified" ? note.modified : note.created)}</span>

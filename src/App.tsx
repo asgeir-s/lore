@@ -21,6 +21,11 @@ function genPanelId() {
 
 const firstPanelId = genPanelId();
 
+function isMacOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent);
+}
+
 export default function App() {
   const [panels, setPanels] = useState<PanelState[]>(() => [
     { id: firstPanelId },
@@ -41,6 +46,7 @@ export default function App() {
   const [gitBanner, setGitBanner] = useState(false);
   const [gitRemoteUrl, setGitRemoteUrl] = useState("");
   const [gitError, setGitError] = useState<string | null>(null);
+  const primaryModifier = isMacOS() ? "⌘" : "Ctrl";
 
   const panelRefs = useRef<Map<string, PanelHandle>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
@@ -373,8 +379,8 @@ export default function App() {
         setActivePanelIndex(activePanelIndex + 1);
         return;
       }
-      // Cmd+Ctrl++
-      if (e.key === "+" && e.metaKey && e.ctrlKey) {
+      // Cmd/Ctrl+/
+      if ((e.key === "/" || e.key === "?") && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         setShowHotkeys(true);
         return;
@@ -665,22 +671,22 @@ export default function App() {
           <div className="hotkeys-panel">
             <div className="hotkeys-title">Keyboard Shortcuts</div>
             <div className="hotkeys-list">
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>Enter</kbd><span>Save note</span></div>
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>N</kbd><span>New note</span></div>
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>E</kbd><span>Edit note</span></div>
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>S</kbd><span>Star note</span></div>
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>T</kbd><span>Toggle tags</span></div>
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>⌫</kbd><span>Go back</span></div>
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>H</kbd><span>Focus left panel</span></div>
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>L</kbd><span>Focus right panel</span></div>
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>W</kbd><span>Close rightmost panel</span></div>
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>Click</kbd><span>Open in new panel</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>Enter</kbd><span>Save note</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>N</kbd><span>New note</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>E</kbd><span>Edit note</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>S</kbd><span>Star note</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>T</kbd><span>Toggle tags</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>⌫</kbd><span>Go back</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>H</kbd><span>Focus left panel</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>L</kbd><span>Focus right panel</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>W</kbd><span>Close rightmost panel</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>Click</kbd><span>Open in new panel</span></div>
               <div className="hotkey-row"><kbd>Esc</kbd><span>Discard edits / close panel</span></div>
               <div className="hotkey-row"><kbd>Tab</kbd><span>Exit editor to list</span></div>
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>+</kbd><span>Zoom in</span></div>
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>-</kbd><span>Zoom out</span></div>
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>0</kbd><span>Reset zoom</span></div>
-              <div className="hotkey-row"><kbd>⌘</kbd> <kbd>⌃</kbd> <kbd>+</kbd><span>Show shortcuts</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>+</kbd><span>Zoom in</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>-</kbd><span>Zoom out</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>0</kbd><span>Reset zoom</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>/</kbd><span>Show shortcuts</span></div>
             </div>
           </div>
         </div>,

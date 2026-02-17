@@ -20,8 +20,16 @@ Capture first, organize never. Notes live as flat markdown files. Structure emer
 
 - [Rust](https://rustup.rs/) (latest stable)
 - [Node.js](https://nodejs.org/) >= 20
-- [Git](https://git-scm.com/) (for automatic note version history; pre-installed on macOS)
+- [Git](https://git-scm.com/) (for automatic note version history)
 - System dependencies for Tauri v2 (see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/))
+
+### Ubuntu setup (first time only)
+
+Install Linux system packages required by Tauri:
+
+```bash
+npm run setup-ubuntu
+```
 
 ### Install dependencies
 
@@ -37,10 +45,17 @@ cargo tauri dev
 
 ### Build and install
 
-Build the app, then replace the old version in Applications:
+Build and install for your current OS:
 
 ```bash
 npm run install-app
+```
+
+Explicit commands:
+
+```bash
+npm run install-app:macos
+npm run install-app:ubuntu
 ```
 
 Your settings (theme, zoom, git remote) are preserved between builds.
@@ -69,9 +84,11 @@ Notes are stored as flat files in `~/dump/` (configurable).
 
 | Shortcut    | Action                          |
 | ----------- | ------------------------------- |
-| `Cmd+Enter` | Save note                       |
+| `Cmd/Ctrl+Enter` | Save note                  |
 | `Escape`    | Clear textarea, discard content |
-| `Cmd+T`     | Toggle tag input                |
+| `Cmd/Ctrl+T` | Toggle tag input               |
+| `Cmd/Ctrl+Click` | Open note in new panel      |
+| `Cmd/Ctrl+/` | Show shortcut list             |
 
 ## Slash Commands
 
