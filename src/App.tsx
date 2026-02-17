@@ -7,6 +7,7 @@ import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile, getGitRe
 import type { NoteMetadata, SortBy } from "./api";
 import { loadSavedTheme, saveTheme, applyThemeVars } from "./themes";
 import { ThemePicker } from "./ThemePicker";
+import { SearchPalette } from "./SearchPalette";
 
 interface PanelState {
   id: string;
@@ -55,6 +56,8 @@ export default function App() {
   const [deleteWarning, setDeleteWarning] = useState(false);
   const deleteWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gPendingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
+  const spacePendingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const primaryModifier = isMacOS() ? "⌘" : "Ctrl";
 
   const panelRefs = useRef<Map<string, PanelHandle>>(new Map());
@@ -322,6 +325,15 @@ export default function App() {
   // Keyboard shortcuts
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      // When search palette is open, only handle Cmd+P to close it
+      if (searchPaletteOpen) {
+        if (e.key === "p" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          setSearchPaletteOpen(false);
+        }
+        return;
+      }
+
       const activePanel = panelRefs.current.get(
         panels[activePanelIndex]?.id,
       );
@@ -470,6 +482,12 @@ export default function App() {
         setZoom(100);
         return;
       }
+      // Cmd+P — open search palette
+      if (e.key === "p" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setSearchPaletteOpen(true);
+        return;
+      }
       // Tab to leave the editor and enter list navigation mode
       const editorFocused = !!document.activeElement?.closest(".cm-editor");
       const inputFocused = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement;
@@ -540,17 +558,47 @@ export default function App() {
         }
         if (e.key === " ") {
           e.preventDefault();
-          const noteId = activePanel.getHighlightedNoteId();
-          if (!noteId) return;
-          // If note is already open in another panel, do nothing (it's already visible)
-          if (findPanelWithNote(noteId) !== -1) return;
-          // Always preview to the right without moving focus
-          openNoteToRight(activePanelIndex, noteId, false, true);
+          if (spacePendingTimeout.current) {
+            // Double space — open search palette
+            clearTimeout(spacePendingTimeout.current);
+            spacePendingTimeout.current = null;
+            setSearchPaletteOpen(true);
+          } else {
+            // First space — wait for possible second press
+            spacePendingTimeout.current = setTimeout(() => {
+              spacePendingTimeout.current = null;
+              // Single space — preview highlighted note
+              const noteId = activePanel.getHighlightedNoteId();
+              if (!noteId) return;
+              if (findPanelWithNote(noteId) !== -1) return;
+              openNoteToRight(activePanelIndex, noteId, false, true);
+            }, 300);
+          }
+          return;
+        }
+      }
+      // Space Space in Vim normal mode (editor focused but not in insert mode)
+      // Don't preventDefault on first Space so Vim can still handle <Space>fs etc.
+      if (e.key === " " && !e.metaKey && !e.ctrlKey && editorFocused && !inputFocused) {
+        const inVimNormal = vimEnabled && !!document.activeElement?.closest(".cm-editor")?.querySelector(".cm-vimMode");
+        if (inVimNormal) {
+          if (spacePendingTimeout.current) {
+            // Double space — open search palette
+            e.preventDefault();
+            clearTimeout(spacePendingTimeout.current);
+            spacePendingTimeout.current = null;
+            setSearchPaletteOpen(true);
+          } else {
+            // First space — let Vim handle it, but track for double-tap
+            spacePendingTimeout.current = setTimeout(() => {
+              spacePendingTimeout.current = null;
+            }, 300);
+          }
           return;
         }
       }
     },
-    [panels, activePanelIndex, closePanel, openNewPanelToRight, findPanelWithNote, openNoteToRight, vimEnabled, closeWarningIndex, deleteWarning],
+    [panels, activePanelIndex, closePanel, openNewPanelToRight, findPanelWithNote, openNoteToRight, vimEnabled, closeWarningIndex, deleteWarning, searchPaletteOpen],
   );
 
   const handleKeyUp = useCallback(
@@ -831,12 +879,41 @@ export default function App() {
         <div className="git-error-toast">{gitError}</div>,
         document.body,
       )}
+      {searchPaletteOpen && createPortal(
+        <SearchPalette
+          recentNotes={recentNotes}
+          onSelect={(noteId, metaKey) => {
+            const activePanel = panelRefs.current.get(panels[activePanelIndex]?.id);
+            if (!activePanel) return;
+            if (metaKey) {
+              // Cmd+Enter / Cmd+Click — open to the side, keep palette open
+              const existingIndex = findPanelWithNote(noteId);
+              if (existingIndex === -1) {
+                openNoteToRight(activePanelIndex, noteId, true, true);
+              }
+            } else {
+              setSearchPaletteOpen(false);
+              const existingIndex = findPanelWithNote(noteId);
+              if (existingIndex !== -1) {
+                setActivePanelIndex(existingIndex);
+              } else if (activePanel.isUserModified() && activePanel.hasContent()) {
+                openNoteToRight(activePanelIndex, noteId, false);
+              } else {
+                activePanel.loadNote(noteId);
+              }
+            }
+          }}
+          onClose={() => setSearchPaletteOpen(false)}
+        />,
+        document.body,
+      )}
       {showHotkeys && createPortal(
         <div className="hotkeys-overlay">
           <div className="hotkeys-panel">
             <div className="hotkeys-title">Keyboard Shortcuts</div>
             <div className="hotkeys-list">
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>Enter</kbd><span>Save note</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>P</kbd><span>Search notes</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>N</kbd><span>New note</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>E</kbd><span>Edit note</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>S</kbd><span>Star note</span></div>
@@ -850,6 +927,7 @@ export default function App() {
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>J</kbd><span>Select next note</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>K</kbd><span>Select previous note</span></div>
               <div className="hotkey-row"><kbd>J</kbd> / <kbd>K</kbd><span>Scroll down / up</span></div>
+              <div className="hotkey-row"><kbd>Space</kbd> <kbd>Space</kbd><span>Search notes</span></div>
               <div className="hotkey-row"><kbd>Esc</kbd><span>Discard edits / close panel</span></div>
               <div className="hotkey-row"><kbd>Tab</kbd><span>Exit editor to list</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>+</kbd><span>Zoom in</span></div>
