@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Editor } from "./Editor";
 import { NotesList } from "./NotesList";
 import { TagInput } from "./TagInput";
+import { SidePanel } from "./SidePanel";
 import {
   saveNote,
   getNote,
@@ -20,6 +21,7 @@ export default function App() {
   const [recentNotes, setRecentNotes] = useState<NoteMetadata[]>([]);
   const [relatedNotes, setRelatedNotes] = useState<NoteMetadata[]>([]);
   const [allTags, setAllTags] = useState<string[]>([]);
+  const [sidePanelNoteId, setSidePanelNoteId] = useState<string | null>(null);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editorRef = useRef<{ focus: () => void; clear: () => void } | null>(
     null,
@@ -106,6 +108,7 @@ export default function App() {
       setTags([]);
       setRelatedNotes([]);
       setShowTagInput(false);
+      setSidePanelNoteId(null);
       editorRef.current?.clear();
       await refreshRecentNotes();
       await refreshTags();
@@ -117,6 +120,12 @@ export default function App() {
   const handleOpenNote = useCallback(
     async (noteId: string) => {
       try {
+        // If editing an existing note, open the linked note in the side panel
+        if (editingId) {
+          setSidePanelNoteId(noteId);
+          return;
+        }
+
         // If currently typing new content, auto-save it first
         if (content.trim() && !editingId) {
           await saveNote(null, content, tags);
@@ -141,6 +150,7 @@ export default function App() {
     setTags([]);
     setRelatedNotes([]);
     setShowTagInput(false);
+    setSidePanelNoteId(null);
     editorRef.current?.clear();
   }, []);
 
@@ -176,31 +186,53 @@ export default function App() {
   const displayedNotes = isTyping ? relatedNotes : recentNotes;
   const listLabel = isTyping ? "Related" : "Recent";
 
+  const handleCloseSidePanel = useCallback(() => {
+    setSidePanelNoteId(null);
+  }, []);
+
+  const handleSidePanelRefresh = useCallback(async () => {
+    await refreshRecentNotes();
+    await refreshTags();
+  }, []);
+
   return (
-    <div className="app">
-      {showTagInput && (
-        <TagInput
-          tags={tags}
-          allTags={allTags}
-          onChange={setTags}
+    <div className={`app-layout ${sidePanelNoteId ? "with-side-panel" : ""}`}>
+      <div className="app">
+        {showTagInput && (
+          <TagInput
+            tags={tags}
+            allTags={allTags}
+            onChange={setTags}
+          />
+        )}
+        {editingId && (
+          <div className="editing-indicator" role="status" aria-live="polite">Editing</div>
+        )}
+        <Editor
+          ref={editorRef}
+          content={content}
+          onChange={setContent}
+        />
+        {isTyping && (
+          <div className="save-hint">
+            <kbd>⌘</kbd> + <kbd>Enter</kbd> to save &nbsp; <kbd>Esc</kbd> to
+            discard
+          </div>
+        )}
+        <NotesList
+          notes={displayedNotes}
+          label={listLabel}
+          onOpenNote={handleOpenNote}
+        />
+      </div>
+      {sidePanelNoteId && (
+        <SidePanel
+          noteId={sidePanelNoteId}
+          parentNoteId={editingId}
+          onClose={handleCloseSidePanel}
+          onRefresh={handleSidePanelRefresh}
         />
       )}
-      <Editor
-        ref={editorRef}
-        content={content}
-        onChange={setContent}
-      />
-      {isTyping && (
-        <div className="save-hint">
-          <kbd>⌘</kbd> + <kbd>Enter</kbd> to save &nbsp; <kbd>Esc</kbd> to
-          discard
-        </div>
-      )}
-      <NotesList
-        notes={displayedNotes}
-        label={listLabel}
-        onOpenNote={handleOpenNote}
-      />
     </div>
   );
 }
