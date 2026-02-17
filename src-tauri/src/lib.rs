@@ -184,7 +184,7 @@ pub fn run() {
             if let Ok(git) = state.git.lock() {
                 let git = git.clone();
                 git.flush_and_push();
-            }
+            };
         }
     });
 }
