@@ -350,25 +350,107 @@ pub fn list_recent_notes(index: &NoteIndex, limit: usize, sort_by: &str) -> Vec<
     notes.into_iter().take(limit).cloned().collect()
 }
 
+/// Fuzzy-match `query` against `target` by walking query chars in order through target.
+/// Returns `None` if not all query chars are found in order.
+/// Scoring: +1 per matched char, +2 for word-boundary matches, +3 for consecutive matches.
+fn fuzzy_score(query: &str, target: &str) -> Option<i32> {
+    let query_lower: Vec<char> = query.to_lowercase().chars().collect();
+    let target_lower: Vec<char> = target.to_lowercase().chars().collect();
+
+    if query_lower.is_empty() {
+        return None;
+    }
+
+    let mut score: i32 = 0;
+    let mut qi = 0;
+    let mut last_match: Option<usize> = None;
+
+    for (ti, tc) in target_lower.iter().enumerate() {
+        if qi < query_lower.len() && *tc == query_lower[qi] {
+            score += 1; // base point per match
+
+            // Word-boundary bonus: start of string, or after space/_/-
+            if ti == 0
+                || matches!(target_lower.get(ti.wrapping_sub(1)), Some(' ' | '_' | '-'))
+            {
+                score += 2;
+            }
+
+            // Consecutive bonus
+            if last_match == Some(ti.wrapping_sub(1)) {
+                score += 3;
+            }
+
+            last_match = Some(ti);
+            qi += 1;
+        }
+    }
+
+    if qi == query_lower.len() {
+        Some(score)
+    } else {
+        None
+    }
+}
+
 /// Search notes by simple text matching (fallback when qmd is not available)
 pub fn search_notes(
     notes_dir: &str,
     query: &str,
     index: &NoteIndex,
 ) -> io::Result<Vec<NoteMetadata>> {
-    // First try qmd
-    if let Ok(results) = search_with_qmd(notes_dir, query, index) {
-        if !results.is_empty() {
-            return Ok(results);
+    if query.trim().is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    let mut merged: Vec<NoteMetadata> = Vec::new();
+
+    // 1. Fuzzy title matches from in-memory index
+    let mut fuzzy_hits: Vec<(i32, &NoteMetadata)> = index
+        .notes
+        .values()
+        .filter_map(|meta| fuzzy_score(query, &meta.title).map(|s| (s, meta)))
+        .collect();
+    fuzzy_hits.sort_by(|a, b| b.0.cmp(&a.0));
+
+    for (_, meta) in &fuzzy_hits {
+        if seen.insert(meta.id.clone()) {
+            merged.push((*meta).clone());
         }
     }
 
-    // Fallback: simple text search
+    // 2. Content matches (qmd first, then substring fallback)
+    let content_results = if let Ok(results) = search_with_qmd(notes_dir, query, index) {
+        if !results.is_empty() {
+            results
+        } else {
+            content_search_fallback(notes_dir, query, index)
+        }
+    } else {
+        content_search_fallback(notes_dir, query, index)
+    };
+
+    for meta in content_results {
+        if seen.insert(meta.id.clone()) {
+            merged.push(meta);
+        }
+    }
+
+    Ok(merged.into_iter().take(20).collect())
+}
+
+/// Fallback content search using simple substring matching
+fn content_search_fallback(
+    notes_dir: &str,
+    query: &str,
+    index: &NoteIndex,
+) -> Vec<NoteMetadata> {
     let query_lower = query.to_lowercase();
     let terms: Vec<&str> = query_lower.split_whitespace().collect();
 
     if terms.is_empty() {
-        return Ok(vec![]);
+        return vec![];
     }
 
     let mut results: Vec<NoteMetadata> = Vec::new();
@@ -385,7 +467,7 @@ pub fn search_notes(
     }
 
     results.sort_by(|a, b| b.created.cmp(&a.created));
-    Ok(results.into_iter().take(20).collect())
+    results
 }
 
 /// Try to search using qmd
@@ -798,6 +880,77 @@ mod tests {
         let results = search_notes(&dir, "apple", &index).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Apple pie recipe");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_fuzzy_score_basic() {
+        // All chars found in order
+        assert!(fuzzy_score("mn", "Meeting Notes").is_some());
+        // Not all chars found
+        assert!(fuzzy_score("zz", "Meeting Notes").is_none());
+        // Empty query
+        assert!(fuzzy_score("", "Meeting Notes").is_none());
+    }
+
+    #[test]
+    fn test_fuzzy_score_word_boundary() {
+        let s1 = fuzzy_score("mn", "Meeting Notes").unwrap();
+        let s2 = fuzzy_score("mn", "ameeting bnotes").unwrap();
+        // Word-boundary matches should score higher
+        assert!(s1 > s2);
+    }
+
+    #[test]
+    fn test_fuzzy_score_consecutive() {
+        let s1 = fuzzy_score("meet", "Meeting Notes").unwrap();
+        let s2 = fuzzy_score("meet", "My extra extra things").unwrap();
+        // Consecutive matches should score higher
+        assert!(s1 > s2);
+    }
+
+    #[test]
+    fn test_fuzzy_score_case_insensitive() {
+        assert_eq!(
+            fuzzy_score("MTG", "Meeting"),
+            fuzzy_score("mtg", "Meeting")
+        );
+    }
+
+    #[test]
+    fn test_search_notes_fuzzy_title() {
+        let dir = setup_test_dir();
+        let mut index = NoteIndex::default();
+
+        save_note(&dir, None, "# Meeting Notes\n\nSome content", &[], &mut index).unwrap();
+        save_note(&dir, None, "# Quick Start Guide\n\nAnother doc", &[], &mut index).unwrap();
+        save_note(&dir, None, "# Random Thoughts\n\nUnrelated", &[], &mut index).unwrap();
+
+        // "mtg" fuzzy matches "Meeting" (m-t from Mee_t_ing, g from Meetin_g_... wait, no g in Meeting)
+        // Actually: "mtg" → M(eeting) → no t or g... Let me think.
+        // M-e-e-t-i-n-g  N-o-t-e-s: m✓, t✓ (pos 3), g✓ (pos 6)  → matches!
+        let results = search_notes(&dir, "mtg", &index).unwrap();
+        assert!(results.iter().any(|r| r.title == "Meeting Notes"));
+
+        // "qck" fuzzy matches "Quick" → q✓, c✓ (pos 3 in "Quick"), k✓ (pos 4)
+        let results = search_notes(&dir, "qck", &index).unwrap();
+        assert!(results.iter().any(|r| r.title == "Quick Start Guide"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_search_notes_deduplication() {
+        let dir = setup_test_dir();
+        let mut index = NoteIndex::default();
+
+        // Title AND content both match "apple"
+        save_note(&dir, None, "# Apple pie recipe\n\nDelicious apple pie", &[], &mut index).unwrap();
+
+        let results = search_notes(&dir, "apple", &index).unwrap();
+        // Should appear only once despite matching both fuzzy title and content
+        assert_eq!(results.iter().filter(|r| r.title == "Apple pie recipe").count(), 1);
 
         fs::remove_dir_all(&dir).ok();
     }

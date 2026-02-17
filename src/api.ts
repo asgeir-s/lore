@@ -108,21 +108,68 @@ export async function listRecentNotes(
   return notes.slice(0, limit);
 }
 
+/** Fuzzy-match query against target by walking query chars in order.
+ *  Returns null if not all chars found, otherwise a score (higher = better).
+ *  +1 per match, +2 for word-boundary, +3 for consecutive. */
+function fuzzyScore(query: string, target: string): number | null {
+  const qLower = query.toLowerCase();
+  const tLower = target.toLowerCase();
+  if (!qLower.length) return null;
+
+  let score = 0;
+  let qi = 0;
+  let lastMatch: number | null = null;
+
+  for (let ti = 0; ti < tLower.length && qi < qLower.length; ti++) {
+    if (tLower[ti] === qLower[qi]) {
+      score += 1;
+      if (ti === 0 || " _-".includes(tLower[ti - 1])) {
+        score += 2;
+      }
+      if (lastMatch === ti - 1) {
+        score += 3;
+      }
+      lastMatch = ti;
+      qi++;
+    }
+  }
+
+  return qi === qLower.length ? score : null;
+}
+
 export async function searchNotes(query: string): Promise<NoteMetadata[]> {
   if (isTauri()) {
     return invoke<NoteMetadata[]>("search_notes", { query });
   }
-  const q = query.toLowerCase();
-  const results: NoteMetadata[] = [];
+  if (!query.trim()) return [];
+
+  const seen = new Set<string>();
+  const merged: NoteMetadata[] = [];
+
+  // 1. Fuzzy title matches
+  const fuzzyHits: { score: number; meta: NoteMetadata }[] = [];
   for (const [, note] of memoryNotes) {
-    if (
-      note.content.toLowerCase().includes(q) ||
-      note.meta.title.toLowerCase().includes(q)
-    ) {
-      results.push(note.meta);
+    const s = fuzzyScore(query, note.meta.title);
+    if (s !== null) fuzzyHits.push({ score: s, meta: note.meta });
+  }
+  fuzzyHits.sort((a, b) => b.score - a.score);
+  for (const hit of fuzzyHits) {
+    if (!seen.has(hit.meta.id)) {
+      seen.add(hit.meta.id);
+      merged.push(hit.meta);
     }
   }
-  return results;
+
+  // 2. Content substring matches
+  const q = query.toLowerCase();
+  for (const [, note] of memoryNotes) {
+    if (!seen.has(note.meta.id) && note.content.toLowerCase().includes(q)) {
+      seen.add(note.meta.id);
+      merged.push(note.meta);
+    }
+  }
+
+  return merged.slice(0, 20);
 }
 
 export async function getAllTags(): Promise<string[]> {
