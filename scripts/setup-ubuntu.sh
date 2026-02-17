@@ -37,6 +37,8 @@ sudo apt-get install -y \
   curl \
   file \
   git \
+  nodejs \
+  npm \
   libgtk-3-dev \
   libssl-dev \
   librsvg2-dev \
@@ -45,5 +47,14 @@ sudo apt-get install -y \
   "$JSCORE_PKG" \
   "$APPINDICATOR_PKG"
 
-echo "Ubuntu build dependencies installed."
-echo "If needed, install Rust and Node.js before running the app."
+# Install Rust if not present
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "Installing Rust..."
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  # shellcheck source=/dev/null
+  . "$HOME/.cargo/env"
+else
+  echo "Rust already installed."
+fi
+
+echo "All dependencies installed. You can now run: npm run install-app"
