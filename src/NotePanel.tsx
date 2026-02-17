@@ -15,7 +15,6 @@ import {
   saveNote,
   getNote,
   deleteNote,
-  searchNotes,
   toggleStar,
   getRelatedNotes,
 } from "./api";
@@ -81,12 +80,10 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     const [loadedNoteId, setLoadedNoteId] = useState<string | null>(null);
     const [tags, setTags] = useState<string[]>([]);
     const [showTagInput, setShowTagInput] = useState(false);
-    const [relatedNotes, setRelatedNotes] = useState<NoteMetadata[]>([]);
     const [precomputedRelated, setPrecomputedRelated] = useState<NoteMetadata[]>([]);
     const [userModified, setUserModified] = useState(independent ?? false);
     const [highlightIndex, setHighlightIndex] = useState(-1);
     const [starred, setStarred] = useState(false);
-    const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
     const editorRef = useRef<{ focus: () => void; blur: () => void; clear: () => void } | null>(
       null,
     );
@@ -104,7 +101,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             historyRef.current.push(loadedNoteIdRef.current);
           }
           if (noteId !== loadedNoteIdRef.current) {
-            setRelatedNotes([]);
+            setPrecomputedRelated([]);
           }
           const note = await getNote(noteId);
           setContent(note.content);
@@ -133,7 +130,6 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       loadedNoteIdRef.current = null;
       setTags([]);
       setStarred(false);
-      setRelatedNotes([]);
       setPrecomputedRelated([]);
       setShowTagInput(false);
       setUserModified(false);
@@ -158,10 +154,13 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     }, [content, loadedNoteId, tags, onSaved]);
 
     const displayedNotes = useMemo(() => {
-      if (isTyping) return relatedNotes;
-      if (loadedNoteId && !userModified) return precomputedRelated;
-      return recentNotes;
-    }, [isTyping, relatedNotes, loadedNoteId, userModified, precomputedRelated, recentNotes]);
+      // Existing note (viewing or editing) — show precomputed related
+      if (loadedNoteId) return precomputedRelated;
+      // New panel with no note loaded — show recent notes
+      if (!isTyping) return recentNotes;
+      // Typing in a new note — show nothing
+      return [];
+    }, [isTyping, loadedNoteId, precomputedRelated, recentNotes]);
 
     useImperativeHandle(
       ref,
@@ -279,44 +278,10 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       }
     }, [initialNoteId, loadNote]);
 
-    // Debounced search when typing
+    // Fetch precomputed related notes when a saved note is loaded.
+    // Don't re-fetch or clear when entering edit mode — keep showing them.
     useEffect(() => {
-      if (searchTimeout.current) {
-        clearTimeout(searchTimeout.current);
-      }
-
-      if (!isTyping) {
-        setRelatedNotes([]);
-        return;
-      }
-
-      searchTimeout.current = setTimeout(async () => {
-        try {
-          const lines = content.split("\n").filter((l) => l.trim());
-          const searchText =
-            lines.length > 0 ? lines[lines.length - 1].trim() : "";
-          if (searchText.length < 2) return;
-
-          const results = await searchNotes(searchText);
-          const filtered = loadedNoteId
-            ? results.filter((n) => n.id !== loadedNoteId)
-            : results;
-          setRelatedNotes(filtered);
-        } catch {
-          // Ignore search errors
-        }
-      }, 500);
-
-      return () => {
-        if (searchTimeout.current) {
-          clearTimeout(searchTimeout.current);
-        }
-      };
-    }, [content, loadedNoteId, isTyping]);
-
-    // Fetch precomputed related notes when viewing a saved note.
-    useEffect(() => {
-      if (!loadedNoteId || userModified) {
+      if (!loadedNoteId) {
         setPrecomputedRelated([]);
         return;
       }
@@ -327,7 +292,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         if (!cancelled) setPrecomputedRelated([]);
       });
       return () => { cancelled = true; };
-    }, [loadedNoteId, userModified]);
+    }, [loadedNoteId]);
 
     // Listen for backend related-notes-changed event.
     useEffect(() => {
@@ -373,11 +338,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       requestAnimationFrame(() => editorRef.current?.focus());
     }, []);
 
-    const listLabel = isTyping
-      ? "Related"
-      : (loadedNoteId && !userModified)
-        ? "Related"
-        : "Recent";
+    const listLabel = loadedNoteId ? "Related" : "Recent";
 
     // Reset highlight when notes list changes
     useEffect(() => {
