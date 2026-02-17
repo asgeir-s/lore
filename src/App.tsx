@@ -408,8 +408,11 @@ export default function App() {
         setActivePanelIndex(activePanelIndex + 1);
         return;
       }
-      // Ctrl+Cmd + + — show shortcuts (requires both modifiers)
-      if (e.key === "+" && e.metaKey && e.ctrlKey) {
+      // Show shortcuts: Ctrl+Cmd++ on Mac, Ctrl+/ on Linux
+      if (
+        (isMacOS() && e.key === "+" && e.metaKey && e.ctrlKey) ||
+        (!isMacOS() && e.key === "/" && e.ctrlKey)
+      ) {
         e.preventDefault();
         setShowHotkeys(true);
         return;
@@ -760,7 +763,10 @@ export default function App() {
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>+</kbd><span>Zoom in</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>-</kbd><span>Zoom out</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>0</kbd><span>Reset zoom</span></div>
-              <div className="hotkey-row"><kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>+</kbd><span>Show shortcuts</span></div>
+              {isMacOS()
+                ? <div className="hotkey-row"><kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>+</kbd><span>Show shortcuts</span></div>
+                : <div className="hotkey-row"><kbd>Ctrl</kbd> <kbd>/</kbd><span>Show shortcuts</span></div>
+              }
             </div>
           </div>
         </div>,

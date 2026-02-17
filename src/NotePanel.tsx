@@ -325,7 +325,10 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         </div>
         <Editor ref={editorRef} content={content} onChange={handleChange} editing={userModified || !loadedNoteId} themeId={themeId} />
         <div className="save-hint">
-          <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>+</kbd> shortcuts
+          {/Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
+            ? <><kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>+</kbd> shortcuts</>
+            : <><kbd>Ctrl</kbd> <kbd>/</kbd> shortcuts</>
+          }
         </div>
         <NotesList
           notes={displayedNotes}
