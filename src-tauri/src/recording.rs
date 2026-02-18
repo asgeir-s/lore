@@ -1057,6 +1057,8 @@ async fn transcribe(wav_path: &Path, whisper_model_override: Option<&str>) -> Re
             &model_str,
             "-f",
             &wav_str,
+            "-l",
+            "auto",
             "-oj",
             "-of",
             &output_base_str,
@@ -1098,19 +1100,26 @@ fn parse_whisper_json(json: &str) -> Result<String, String> {
 
     if let Some(transcription) = val.get("transcription").and_then(|v| v.as_array()) {
         for segment in transcription {
-            let start = segment
-                .get("timestamps")
-                .and_then(|t| t.get("from"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("00:00:00");
             let text = segment
                 .get("text")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .trim();
             if !text.is_empty() {
-                // Trim to MM:SS format.
-                let ts = format_timestamp(start);
+                // Prefer offsets (milliseconds) over timestamp strings.
+                let ts = if let Some(ms) = segment.get("offsets").and_then(|o| o.get("from")).and_then(|v| v.as_u64()) {
+                    let total_secs = ms / 1000;
+                    let mins = total_secs / 60;
+                    let secs = total_secs % 60;
+                    format!("{:02}:{:02}", mins, secs)
+                } else {
+                    let start = segment
+                        .get("timestamps")
+                        .and_then(|t| t.get("from"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("00:00:00");
+                    format_timestamp(start)
+                };
                 lines.push(format!("[{ts}] {text}"));
             }
         }
@@ -1127,14 +1136,16 @@ fn parse_whisper_json(json: &str) -> Result<String, String> {
     Ok(lines.join("\n"))
 }
 
-/// Convert timestamp string like "00:01:30.500" to "01:30".
+/// Convert timestamp string like "00:01:30,500" or "00:01:30.500" to "01:30".
 fn format_timestamp(ts: &str) -> String {
     let parts: Vec<&str> = ts.split(':').collect();
     match parts.len() {
         3 => {
             let hours: u32 = parts[0].parse().unwrap_or(0);
             let minutes: u32 = parts[1].parse().unwrap_or(0);
-            let seconds: f64 = parts[2].parse().unwrap_or(0.0);
+            // whisper-cpp uses comma as decimal separator (e.g. "30,500")
+            let sec_str = parts[2].replace(',', ".");
+            let seconds: f64 = sec_str.parse().unwrap_or(0.0);
             let total_minutes = hours * 60 + minutes;
             format!("{:02}:{:02}", total_minutes, seconds as u32)
         }
@@ -1180,10 +1191,26 @@ async fn summarize(transcript: &str, summary_model_override: Option<&str>) -> Re
 
     // Truncate transcript to ~4000 chars for the prompt.
     let truncated: String = transcript.chars().take(4000).collect();
-    let prompt = format!(
-        "Summarize this meeting transcript into key points, decisions, and action items. Use markdown formatting.\n\n{}",
-        truncated
-    );
+
+    // Detect language by checking for common Norwegian words.
+    let lower = truncated.to_lowercase();
+    let norwegian_markers = [" og ", " er ", " det ", " som ", " har ", " med ", " for ", " på ", " til ", " ikke "];
+    let english_markers = [" the ", " and ", " is ", " that ", " have ", " with ", " for ", " this ", " not ", " are "];
+    let no_score: usize = norwegian_markers.iter().filter(|w| lower.contains(*w)).count();
+    let en_score: usize = english_markers.iter().filter(|w| lower.contains(*w)).count();
+    let is_norwegian = no_score > en_score;
+
+    let prompt = if is_norwegian {
+        format!(
+            "Oppsummer dette møtetranskriptet med hovedpunkter, beslutninger og oppgaver. Bruk markdown-formatering. Skriv kun på norsk.\n\n{}",
+            truncated
+        )
+    } else {
+        format!(
+            "Summarize this meeting transcript into key points, decisions, and action items. Use markdown formatting.\n\n{}",
+            truncated
+        )
+    };
 
     let out = cmd("ollama")
         .args(["run", &model, &prompt])
