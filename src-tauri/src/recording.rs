@@ -1,6 +1,6 @@
 use crate::qmd::cmd;
 use crate::AppState;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -24,8 +24,16 @@ pub struct InputDeviceInfo {
 
 #[derive(Clone, Serialize)]
 struct ProgressPayload {
+    note_id: String,
     stage: String,
     detail: String,
+}
+
+#[derive(Clone, Serialize)]
+struct RecordingCompletePayload {
+    note_id: String,
+    summary: Option<String>,
+    transcript: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -33,6 +41,70 @@ struct TickPayload {
     elapsed_seconds: u64,
     mic_level: f32,
     system_level: f32,
+}
+
+// ── Job persistence for crash recovery ──────────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
+pub enum JobStage {
+    Recording,
+    Mixing,
+    Transcribing,
+    Summarizing,
+    Saving,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RecordingJob {
+    pub note_id: String,
+    pub stage: JobStage,
+    pub notes_dir: String,
+    pub mic_path: String,
+    pub system_path: String,
+    pub final_wav_path: String,
+    pub has_system: bool,
+    pub transcript: Option<String>,
+    pub summary: Option<String>,
+    pub created_at: String,
+}
+
+impl RecordingJob {
+    fn job_path(notes_dir: &str, note_id: &str) -> PathBuf {
+        PathBuf::from(notes_dir)
+            .join("meetings/.audio")
+            .join(format!("{note_id}.job.json"))
+    }
+
+    pub fn save(&self) -> Result<(), String> {
+        let path = Self::job_path(&self.notes_dir, &self.note_id);
+        let tmp = path.with_extension("tmp");
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("serialize job: {e}"))?;
+        std::fs::write(&tmp, &json).map_err(|e| format!("write job tmp: {e}"))?;
+        std::fs::rename(&tmp, &path).map_err(|e| format!("rename job: {e}"))?;
+        Ok(())
+    }
+
+    pub fn delete(&self) {
+        let path = Self::job_path(&self.notes_dir, &self.note_id);
+        let _ = std::fs::remove_file(path);
+    }
+
+    pub fn scan(notes_dir: &str) -> Vec<RecordingJob> {
+        let pattern = PathBuf::from(notes_dir)
+            .join("meetings/.audio/*.job.json")
+            .to_string_lossy()
+            .to_string();
+        let mut jobs = Vec::new();
+        for entry in glob::glob(&pattern).into_iter().flatten().flatten() {
+            if let Ok(json) = std::fs::read_to_string(&entry) {
+                if let Ok(job) = serde_json::from_str::<RecordingJob>(&json) {
+                    jobs.push(job);
+                }
+            }
+        }
+        jobs
+    }
 }
 
 /// Shared peak level updated by audio callbacks, read+reset by the tick emitter.
@@ -167,6 +239,24 @@ async fn run_worker(
                 let stop_flag_thread = stop_flag.clone();
                 let mic_path = audio_dir.join(format!("{note_id}_mic.wav"));
                 let system_path = audio_dir.join(format!("{note_id}_system.wav"));
+                let final_wav = audio_dir.join(format!("{note_id}.wav"));
+
+                // Create job file immediately.
+                let mut job = RecordingJob {
+                    note_id: note_id.clone(),
+                    stage: JobStage::Recording,
+                    notes_dir: notes_dir.clone(),
+                    mic_path: mic_path.to_string_lossy().to_string(),
+                    system_path: system_path.to_string_lossy().to_string(),
+                    final_wav_path: final_wav.to_string_lossy().to_string(),
+                    has_system: false,
+                    transcript: None,
+                    summary: None,
+                    created_at: chrono::Local::now().to_rfc3339(),
+                };
+                if let Err(e) = job.save() {
+                    eprintln!("recording: failed to save job file: {e}");
+                }
 
                 let mic_level: AudioLevel = Arc::new(AtomicU32::new(0.0_f32.to_bits()));
                 let system_level: AudioLevel = Arc::new(AtomicU32::new(0.0_f32.to_bits()));
@@ -209,17 +299,16 @@ async fn run_worker(
                     }
                 });
 
-                // Wait for Stop message.
+                // Wait for Stop or Shutdown message.
+                let mut is_shutdown = false;
                 loop {
                     match rx.recv().await {
-                        Some(Msg::Stop) | Some(Msg::Shutdown) => {
-                            // Signal the capture thread to stop.
+                        Some(Msg::Stop) => {
                             stop_flag.store(true, Ordering::Relaxed);
                             active.store(false, Ordering::Relaxed);
                             tick_handle.abort();
                             let _ = app_handle.emit("recording-stopped", &note_id);
 
-                            // Wait for capture thread to finish.
                             let capture_result = capture_thread.join();
                             let has_system = match &capture_result {
                                 Ok(Ok(has_sys)) => *has_sys,
@@ -233,20 +322,49 @@ async fn run_worker(
                                 }
                             };
 
-                            // Start processing pipeline.
-                            process_recording(
-                                &app_handle,
-                                &notes_dir,
-                                &note_id,
-                                &mic_path,
-                                &system_path,
-                                has_system,
-                            )
-                            .await;
+                            job.has_system = has_system;
+                            job.stage = JobStage::Mixing;
+                            let _ = job.save();
+
+                            // Run post-processing in the background so the worker can
+                            // accept a new recording immediately.
+                            let app_handle_clone = app_handle.clone();
+                            tauri::async_runtime::spawn(async move {
+                                process_recording(&app_handle_clone, &mut job).await;
+                            });
 
                             if let Ok(mut slot) = note_id_slot.lock() {
                                 *slot = None;
                             }
+                            break;
+                        }
+                        Some(Msg::Shutdown) => {
+                            // Graceful shutdown: save job for next startup, don't process.
+                            stop_flag.store(true, Ordering::Relaxed);
+                            active.store(false, Ordering::Relaxed);
+                            tick_handle.abort();
+
+                            // Wait for capture thread with 5-second timeout.
+                            let thread_result = tokio::time::timeout(
+                                std::time::Duration::from_secs(5),
+                                tokio::task::spawn_blocking(move || capture_thread.join()),
+                            )
+                            .await;
+
+                            let has_system = match thread_result {
+                                Ok(Ok(Ok(Ok(has_sys)))) => has_sys,
+                                _ => false,
+                            };
+
+                            job.has_system = has_system;
+                            job.stage = JobStage::Mixing;
+                            let _ = job.save();
+                            eprintln!("recording: shutdown — job saved for resume on next startup");
+
+                            if let Ok(mut slot) = note_id_slot.lock() {
+                                *slot = None;
+                            }
+                            is_shutdown = true;
                             break;
                         }
                         Some(Msg::Start { .. }) => {
@@ -257,9 +375,13 @@ async fn run_worker(
                             stop_flag.store(true, Ordering::Relaxed);
                             active.store(false, Ordering::Relaxed);
                             tick_handle.abort();
+                            is_shutdown = true;
                             break;
                         }
                     }
+                }
+                if is_shutdown {
+                    break;
                 }
             }
             Some(Msg::Stop) => {
@@ -642,82 +764,141 @@ fn record_device_inner(
 
 async fn process_recording(
     app_handle: &tauri::AppHandle,
-    notes_dir: &str,
-    note_id: &str,
-    mic_path: &Path,
-    system_path: &Path,
-    has_system: bool,
+    job: &mut RecordingJob,
 ) {
-    let audio_dir = PathBuf::from(notes_dir).join("meetings/.audio");
-    let final_wav = audio_dir.join(format!("{note_id}.wav"));
+    let mic_path = PathBuf::from(&job.mic_path);
+    let system_path = PathBuf::from(&job.system_path);
+    let final_wav = PathBuf::from(&job.final_wav_path);
 
-    // Step 1: Mix/convert audio
-    emit_progress(app_handle, "mixing", "Mixing audio...");
+    // Step 1: Mix/convert audio (skip if already past this stage)
+    if job.stage <= JobStage::Mixing {
+        if final_wav.exists() {
+            // Already mixed — skip
+            eprintln!("recording: final wav exists, skipping mix");
+        } else {
+            emit_progress(app_handle, &job.note_id, "mixing", "Mixing audio...");
 
-    let mix_ok = if has_system && system_path.exists() && mic_path.exists() {
-        mix_audio(mic_path, system_path, &final_wav).await
-    } else if mic_path.exists() {
-        convert_mono(mic_path, &final_wav).await
-    } else {
-        Err("No audio files found".to_string())
-    };
+            let mix_ok = if job.has_system && system_path.exists() && mic_path.exists() {
+                mix_audio(&mic_path, &system_path, &final_wav).await
+            } else if mic_path.exists() {
+                convert_mono(&mic_path, &final_wav).await
+            } else {
+                Err("No audio files found".to_string())
+            };
 
-    if let Err(e) = &mix_ok {
-        eprintln!("recording: mix failed: {e}");
-        let _ = app_handle.emit("recording-error", format!("Audio mixing failed: {e}"));
-        create_error_note(app_handle, notes_dir, note_id, "Audio processing failed").await;
-        return;
-    }
-
-    // Clean up intermediate files.
-    let _ = std::fs::remove_file(mic_path);
-    if has_system {
-        let _ = std::fs::remove_file(system_path);
-    }
-
-    // Step 2: Transcribe
-    emit_progress(app_handle, "transcribing", "Transcribing audio...");
-    let transcript = transcribe(&final_wav).await;
-
-    let transcript_text = match &transcript {
-        Ok(t) => t.clone(),
-        Err(e) => {
-            eprintln!("recording: transcription failed: {e}");
-            let _ = app_handle.emit(
-                "recording-error",
-                format!("Transcription failed: {e}"),
-            );
-            create_error_note(
-                app_handle,
-                notes_dir,
-                note_id,
-                &format!(
-                    "Transcription failed. Audio saved at `meetings/.audio/{note_id}.wav`."
-                ),
-            )
-            .await;
-            return;
+            if let Err(e) = &mix_ok {
+                eprintln!("recording: mix failed: {e}");
+                let _ = app_handle.emit("recording-error", format!("Audio mixing failed: {e}"));
+                create_error_note(app_handle, &job.notes_dir, &job.note_id, "Audio processing failed").await;
+                job.delete();
+                return;
+            }
         }
-    };
 
-    // Step 3: Summarize
-    emit_progress(app_handle, "summarizing", "Summarizing transcript...");
-    let summary = summarize(&transcript_text).await.unwrap_or_else(|e| {
-        eprintln!("recording: summarization failed: {e}");
-        "*Summary unavailable — ollama not reachable.*".to_string()
-    });
+        // Clean up intermediate files.
+        let _ = std::fs::remove_file(&mic_path);
+        if job.has_system {
+            let _ = std::fs::remove_file(&system_path);
+        }
 
-    // Step 4: Create meeting note
-    emit_progress(app_handle, "saving", "Creating meeting note...");
-    create_meeting_note(app_handle, notes_dir, note_id, &summary, &transcript_text).await;
+        job.stage = JobStage::Transcribing;
+        let _ = job.save();
+    }
 
-    let _ = app_handle.emit("recording-complete", note_id);
+    // Step 2: Transcribe (skip if already past this stage)
+    if job.stage <= JobStage::Transcribing {
+        if job.transcript.is_some() {
+            eprintln!("recording: transcript already available, skipping");
+        } else {
+            emit_progress(app_handle, &job.note_id, "transcribing", "Transcribing audio...");
+            let transcript = transcribe(&final_wav).await;
+
+            match transcript {
+                Ok(t) => {
+                    job.transcript = Some(t);
+                }
+                Err(e) => {
+                    eprintln!("recording: transcription failed: {e}");
+                    let _ = app_handle.emit(
+                        "recording-error",
+                        format!("Transcription failed: {e}"),
+                    );
+                    create_error_note(
+                        app_handle,
+                        &job.notes_dir,
+                        &job.note_id,
+                        &format!(
+                            "Transcription failed. Audio saved at `meetings/.audio/{}.wav`.",
+                            job.note_id
+                        ),
+                    )
+                    .await;
+                    job.delete();
+                    return;
+                }
+            }
+        }
+
+        job.stage = JobStage::Summarizing;
+        let _ = job.save();
+    }
+
+    let transcript_text = job.transcript.clone().unwrap_or_default();
+
+    // Step 3: Summarize (skip if already past this stage)
+    if job.stage <= JobStage::Summarizing {
+        if job.summary.is_some() {
+            eprintln!("recording: summary already available, skipping");
+        } else {
+            emit_progress(app_handle, &job.note_id, "summarizing", "Summarizing transcript...");
+            let summary = summarize(&transcript_text).await.unwrap_or_else(|e| {
+                eprintln!("recording: summarization failed: {e}");
+                "*Summary unavailable — ollama not reachable.*".to_string()
+            });
+            job.summary = Some(summary);
+        }
+
+        job.stage = JobStage::Saving;
+        let _ = job.save();
+    }
+
+    let summary = job.summary.clone().unwrap_or_default();
+
+    // Step 4: Create meeting note or emit data for existing note
+    let note_exists = app_handle
+        .try_state::<AppState>()
+        .and_then(|state| {
+            state.index.lock().ok().map(|idx| idx.notes.contains_key(&job.note_id))
+        })
+        .unwrap_or(false);
+
+    if note_exists {
+        // Note already exists in the index — let the frontend append transcript/summary
+        emit_progress(app_handle, &job.note_id, "saving", "Saving meeting data...");
+        job.delete();
+        let _ = app_handle.emit("recording-complete", RecordingCompletePayload {
+            note_id: job.note_id.clone(),
+            summary: Some(summary),
+            transcript: Some(transcript_text),
+        });
+    } else {
+        // No existing note — create a new meeting note
+        emit_progress(app_handle, &job.note_id, "saving", "Creating meeting note...");
+        create_meeting_note(app_handle, &job.notes_dir, &job.note_id, &summary, &transcript_text).await;
+        job.delete();
+        let _ = app_handle.emit("recording-complete", RecordingCompletePayload {
+            note_id: job.note_id.clone(),
+            summary: None,
+            transcript: None,
+        });
+    }
 }
 
-fn emit_progress(app_handle: &tauri::AppHandle, stage: &str, detail: &str) {
+fn emit_progress(app_handle: &tauri::AppHandle, note_id: &str, stage: &str, detail: &str) {
     let _ = app_handle.emit(
         "recording-progress",
         ProgressPayload {
+            note_id: note_id.to_string(),
             stage: stage.to_string(),
             detail: detail.to_string(),
         },
@@ -1057,6 +1238,34 @@ async fn create_meeting_note(
     let _ = app_handle.emit("notes-changed", ());
 }
 
+// ── Resume pending jobs ─────────────────────────────────────────────
+
+pub async fn resume_pending_jobs(app_handle: &tauri::AppHandle, notes_dir: &str) {
+    let jobs = RecordingJob::scan(notes_dir);
+    if jobs.is_empty() {
+        return;
+    }
+    eprintln!("recording: found {} pending job(s) to resume", jobs.len());
+
+    for mut job in jobs {
+        // If still in Recording stage, check if we have any audio to work with.
+        if job.stage == JobStage::Recording {
+            let mic_exists = PathBuf::from(&job.mic_path).exists();
+            let final_exists = PathBuf::from(&job.final_wav_path).exists();
+            if !mic_exists && !final_exists {
+                eprintln!("recording: no audio found for job {}, deleting", job.note_id);
+                job.delete();
+                continue;
+            }
+            job.stage = JobStage::Mixing;
+            let _ = job.save();
+        }
+
+        emit_progress(app_handle, &job.note_id, "resuming", "Resuming processing...");
+        process_recording(app_handle, &mut job).await;
+    }
+}
+
 async fn create_error_note(
     app_handle: &tauri::AppHandle,
     notes_dir: &str,
@@ -1115,5 +1324,9 @@ async fn create_error_note(
     }
 
     let _ = app_handle.emit("notes-changed", ());
-    let _ = app_handle.emit("recording-complete", note_id);
+    let _ = app_handle.emit("recording-complete", RecordingCompletePayload {
+        note_id: note_id.to_string(),
+        summary: None,
+        transcript: None,
+    });
 }

@@ -204,12 +204,46 @@ fn list_input_devices() -> Vec<recording::InputDeviceInfo> {
 }
 
 #[tauri::command]
-fn start_recording(state: State<AppState>, device: Option<String>) -> Result<String, String> {
-    let note_id = uuid::Uuid::new_v4().to_string();
-    let notes_dir = state.notes_dir.lock().map_err(|e| e.to_string())?.clone();
+fn start_recording(state: State<AppState>, device: Option<String>, note_id: Option<String>) -> Result<String, String> {
     let rec = state.recording.lock().map_err(|e| e.to_string())?;
+    if rec.state().active {
+        return Err("Recording already in progress".to_string());
+    }
+    let note_id = note_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let notes_dir = state.notes_dir.lock().map_err(|e| e.to_string())?.clone();
     rec.start(&note_id, &notes_dir, device);
     Ok(note_id)
+}
+
+#[tauri::command]
+fn append_meeting_data(
+    state: State<AppState>,
+    id: String,
+    summary: String,
+    transcript: String,
+) -> Result<NoteMetadata, String> {
+    let (meta, tags_changed) = {
+        let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
+        let mut index = state.index.lock().map_err(|e| e.to_string())?;
+        let old_tags = index
+            .notes
+            .get(&id)
+            .map(|m| m.tags.clone())
+            .unwrap_or_default();
+        let meta = notes::append_meeting_data(&dir, &id, &summary, &transcript, &mut index)
+            .map_err(|e| e.to_string())?;
+        let tags_changed = old_tags != meta.tags;
+        (meta, tags_changed)
+    };
+
+    let git = state.git.lock().map_err(|e| e.to_string())?;
+    git.notify_change(&meta.path, &meta.title, false);
+    if tags_changed {
+        if let Ok(qmd) = state.qmd.lock() {
+            qmd.notify_change(&meta.id, &meta.title);
+        }
+    }
+    Ok(meta)
 }
 
 #[tauri::command]
@@ -223,6 +257,13 @@ fn stop_recording(state: State<AppState>) -> Result<(), String> {
 fn get_recording_state(state: State<AppState>) -> Result<recording::RecordingState, String> {
     let rec = state.recording.lock().map_err(|e| e.to_string())?;
     Ok(rec.state())
+}
+
+#[tauri::command]
+async fn check_pending_jobs(state: State<'_, AppState>, app_handle: tauri::AppHandle) -> Result<(), String> {
+    let notes_dir = state.notes_dir.lock().map_err(|e| e.to_string())?.clone();
+    recording::resume_pending_jobs(&app_handle, &notes_dir).await;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -269,8 +310,10 @@ pub fn run() {
             qmd::check_tools,
             list_input_devices,
             start_recording,
+            append_meeting_data,
             stop_recording,
             get_recording_state,
+            check_pending_jobs,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

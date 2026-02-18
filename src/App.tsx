@@ -3,13 +3,14 @@ import { createPortal } from "react-dom";
 import { NotePanel } from "./NotePanel";
 import type { PanelHandle } from "./NotePanel";
 import { DragSplitter } from "./DragSplitter";
-import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile, getGitRemote, setGitRemote, dismissGitSetup, getNotesDir, setNotesDir, checkTools, startRecording, stopRecording } from "./api";
+import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile, getGitRemote, setGitRemote, dismissGitSetup, getNotesDir, setNotesDir, checkTools, startRecording, stopRecording, checkPendingJobs, appendMeetingData as appendMeetingDataToNote } from "./api";
 import type { RecordingState } from "./api";
 import type { ToolStatus } from "./api";
 import type { NoteMetadata, SortBy } from "./api";
 import { loadSavedTheme, saveTheme, applyThemeVars } from "./themes";
 import { ThemePicker } from "./ThemePicker";
 import { SearchPalette } from "./SearchPalette";
+import { SettingsPanel } from "./SettingsPanel";
 
 interface PanelState {
   id: string;
@@ -55,14 +56,25 @@ export default function App() {
   const [gitError, setGitError] = useState<string | null>(null);
   const [closeWarningIndex, setCloseWarningIndex] = useState<number | null>(null);
   const closeWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [recordingCloseWarningIndex, setRecordingCloseWarningIndex] = useState<number | null>(null);
+  const recordingCloseWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [deleteWarning, setDeleteWarning] = useState(false);
   const deleteWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gPendingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [toolStatus, setToolStatus] = useState<ToolStatus | null>(null);
   const [recording, setRecording] = useState<RecordingState>({ active: false, note_id: null, elapsed_seconds: 0, mic_level: 0, system_level: 0 });
-  const [recordingProgress, setRecordingProgress] = useState<string | null>(null);
+  const [recordingStartPending, setRecordingStartPending] = useState(false);
+  const recordingStartPendingRef = useRef(false);
+  const [processingProgressByPanel, setProcessingProgressByPanel] = useState<Record<string, string>>({});
+  const [processingProgressByNote, setProcessingProgressByNote] = useState<Record<string, string>>({});
   const [recordingDevice, setRecordingDevice] = useState<string | null>(() => localStorage.getItem("recording-device"));
+  const [recordingPanelId, setRecordingPanelId] = useState<string | null>(null);
+  const pendingRecordingPanelRef = useRef<string | null>(null);
+  const pendingRecordingPanelsByNoteRef = useRef<Map<string, string>>(new Map());
+  const recordingNoteToPanelRef = useRef<Map<string, string>>(new Map());
+  const [meetingReadyToast, setMeetingReadyToast] = useState<string | null>(null);
   const spacePendingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const primaryModifier = isMacOS() ? "⌘" : "Ctrl";
 
@@ -163,6 +175,7 @@ export default function App() {
       } catch {
         // Not in Tauri
       }
+
     };
     void init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -193,8 +206,32 @@ export default function App() {
           }
         });
         unlistenRecStarted = await listen<string>("recording-started", (event) => {
-          setRecording({ active: true, note_id: event.payload, elapsed_seconds: 0, mic_level: 0, system_level: 0 });
-          setRecordingProgress(null);
+          const noteId = event.payload;
+          const panelId =
+            pendingRecordingPanelsByNoteRef.current.get(noteId)
+            ?? recordingNoteToPanelRef.current.get(noteId)
+            ?? pendingRecordingPanelRef.current;
+          pendingRecordingPanelsByNoteRef.current.delete(noteId);
+          pendingRecordingPanelRef.current = null;
+          if (panelId) {
+            recordingNoteToPanelRef.current.set(noteId, panelId);
+            setProcessingProgressByPanel((prev) => {
+              if (!prev[panelId]) return prev;
+              const next = { ...prev };
+              delete next[panelId];
+              return next;
+            });
+          }
+          recordingStartPendingRef.current = false;
+          setRecordingStartPending(false);
+          setProcessingProgressByNote((prev) => {
+            if (!prev[noteId]) return prev;
+            const next = { ...prev };
+            delete next[noteId];
+            return next;
+          });
+          setRecording({ active: true, note_id: noteId, elapsed_seconds: 0, mic_level: 0, system_level: 0 });
+          setRecordingPanelId(panelId ?? null);
         });
         unlistenRecTick = await listen<{ elapsed_seconds: number; mic_level: number; system_level: number }>("recording-tick", (event) => {
           setRecording((prev) => ({
@@ -204,27 +241,132 @@ export default function App() {
             system_level: event.payload.system_level,
           }));
         });
-        unlistenRecStopped = await listen("recording-stopped", () => {
+        unlistenRecStopped = await listen<string>("recording-stopped", (event) => {
+          const noteId = event.payload;
+          const panelId = recordingNoteToPanelRef.current.get(noteId);
           setRecording((prev) => ({ ...prev, active: false }));
-          setRecordingProgress("Processing...");
+          setRecordingPanelId(null);
+          if (recordingCloseWarningTimeout.current) {
+            clearTimeout(recordingCloseWarningTimeout.current);
+          }
+          setRecordingCloseWarningIndex(null);
+          setProcessingProgressByNote((prev) => ({
+            ...prev,
+            [noteId]: "Processing...",
+          }));
+          if (panelId) {
+            setProcessingProgressByPanel((prev) => ({
+              ...prev,
+              [panelId]: "Processing...",
+            }));
+          }
         });
-        unlistenRecProgress = await listen<{ stage: string; detail: string }>("recording-progress", (event) => {
-          setRecordingProgress(event.payload.detail);
+        unlistenRecProgress = await listen<{ note_id: string; stage: string; detail: string }>("recording-progress", (event) => {
+          setProcessingProgressByNote((prev) => ({
+            ...prev,
+            [event.payload.note_id]: event.payload.detail,
+          }));
+          const panelId = recordingNoteToPanelRef.current.get(event.payload.note_id);
+          if (!panelId) return;
+          setProcessingProgressByPanel((prev) => ({
+            ...prev,
+            [panelId]: event.payload.detail,
+          }));
         });
-        unlistenRecComplete = await listen<string>("recording-complete", (event) => {
-          setRecordingProgress(null);
-          setRecording({ active: false, note_id: null, elapsed_seconds: 0, mic_level: 0, system_level: 0 });
+        unlistenRecComplete = await listen<{ note_id: string; summary: string | null; transcript: string | null }>("recording-complete", (event) => {
+          const { note_id, summary, transcript } = event.payload;
+          const sourcePanelId = recordingNoteToPanelRef.current.get(note_id);
+          if (sourcePanelId) {
+            setProcessingProgressByPanel((prev) => {
+              if (!prev[sourcePanelId]) return prev;
+              const next = { ...prev };
+              delete next[sourcePanelId];
+              return next;
+            });
+          }
+          recordingNoteToPanelRef.current.delete(note_id);
+          pendingRecordingPanelsByNoteRef.current.delete(note_id);
+          setProcessingProgressByNote((prev) => {
+            if (!prev[note_id]) return prev;
+            const next = { ...prev };
+            delete next[note_id];
+            return next;
+          });
+          setRecording((prev) => {
+            if (prev.active || prev.note_id !== note_id) return prev;
+            return { active: false, note_id: null, elapsed_seconds: 0, mic_level: 0, system_level: 0 };
+          });
           void refreshSharedState();
-          // Load the meeting note in the active panel.
-          const activePanel = panelRefs.current.get(panels[activePanelIndex]?.id);
-          if (activePanel) {
-            activePanel.loadNote(event.payload);
+          if (summary && transcript) {
+            // Existing note — first try the panel where recording started.
+            let found = false;
+            if (sourcePanelId) {
+              const sourcePanel = panelRefs.current.get(sourcePanelId);
+              if (sourcePanel && sourcePanel.getLoadedNoteId() === note_id) {
+                void sourcePanel.appendMeetingData(summary, transcript);
+                found = true;
+              }
+            }
+            if (!found) {
+              for (const panel of panelRefs.current.values()) {
+                if (panel.getLoadedNoteId() === note_id) {
+                  void panel.appendMeetingData(summary, transcript);
+                  found = true;
+                  break;
+                }
+              }
+            }
+            if (!found) {
+              // Panel was closed or note unloaded — persist meeting data to the note
+              // so reopening it later still shows summary/transcript.
+              void appendMeetingDataToNote(note_id, summary, transcript)
+                .then(() => {
+                  void refreshSharedState();
+                  setMeetingReadyToast(note_id);
+                  setTimeout(() => setMeetingReadyToast(null), 8000);
+                })
+                .catch(() => {
+                  setMeetingReadyToast(note_id);
+                  setTimeout(() => setMeetingReadyToast(null), 8000);
+                });
+            }
+          } else {
+            // New note created by backend — never replace the source editing panel.
+            let loaded = false;
+            for (const [panelId, panel] of panelRefs.current.entries()) {
+              if (panelId === sourcePanelId) continue;
+              if (!panel.getLoadedNoteId() && !panel.hasContent() && !panel.isUserModified()) {
+                panel.loadNote(note_id);
+                loaded = true;
+                break;
+              }
+            }
+            if (!loaded) {
+              // No truly empty panel available — open meeting output in a new side panel
+              // while keeping focus in the current editor.
+              setPanels((prev) => [
+                ...prev,
+                { id: genPanelId(), initialNoteId: note_id, independent: true },
+              ]);
+              setPanelWidths((w) => [...w, 1]);
+            }
           }
         });
         unlistenRecError = await listen<string>("recording-error", (event) => {
           setGitError(event.payload); // Reuse the error toast
           setTimeout(() => setGitError(null), 5000);
+          recordingStartPendingRef.current = false;
+          setRecordingStartPending(false);
+          if (recordingCloseWarningTimeout.current) {
+            clearTimeout(recordingCloseWarningTimeout.current);
+          }
+          setRecordingCloseWarningIndex(null);
+          pendingRecordingPanelsByNoteRef.current.clear();
+          pendingRecordingPanelRef.current = null;
         });
+
+        // Resume any pending recording jobs from a previous session.
+        void checkPendingJobs();
       } catch {
         // Not in Tauri
       }
@@ -390,15 +532,89 @@ export default function App() {
     });
   }, [setActivePanelIndex]);
 
+  const handleRecordingPanelClose = useCallback((index: number): boolean => {
+    const panelId = panels[index]?.id;
+    const isRecordingPanel = !!panelId && recording.active && panelId === recordingPanelId;
+    if (!isRecordingPanel) return false;
+
+    if (recordingCloseWarningIndex === index) {
+      if (recordingCloseWarningTimeout.current) {
+        clearTimeout(recordingCloseWarningTimeout.current);
+      }
+      setRecordingCloseWarningIndex(null);
+      void stopRecording();
+      closePanel(index);
+      return true;
+    }
+
+    if (closeWarningTimeout.current) clearTimeout(closeWarningTimeout.current);
+    setCloseWarningIndex(null);
+    if (recordingCloseWarningTimeout.current) {
+      clearTimeout(recordingCloseWarningTimeout.current);
+    }
+    setRecordingCloseWarningIndex(index);
+    recordingCloseWarningTimeout.current = setTimeout(
+      () => setRecordingCloseWarningIndex(null),
+      3000,
+    );
+    return true;
+  }, [panels, recording.active, recordingPanelId, recordingCloseWarningIndex, closePanel]);
+
+  const handleStartRecording = useCallback(async (panelIdArg?: string) => {
+    if (recording.active || recordingStartPendingRef.current) return;
+    const panelId = panelIdArg ?? panels[activePanelIndex]?.id;
+    if (!panelId) return;
+    const panel = panelRefs.current.get(panelId);
+    let noteId: string | undefined;
+    if (panel) {
+      noteId = panel.getLoadedNoteId() ?? undefined;
+      // Ensure recording is always tied to this panel's note, even if brand-new.
+      if (!noteId) {
+        noteId = await panel.ensureRecordingNote();
+      }
+    }
+    pendingRecordingPanelRef.current = panelId;
+    recordingStartPendingRef.current = true;
+    setRecordingStartPending(true);
+    try {
+      const startedNoteId = await startRecording(recordingDevice ?? undefined, noteId);
+      pendingRecordingPanelsByNoteRef.current.set(startedNoteId, panelId);
+      recordingNoteToPanelRef.current.set(startedNoteId, panelId);
+    } catch (e) {
+      recordingStartPendingRef.current = false;
+      setRecordingStartPending(false);
+      pendingRecordingPanelRef.current = null;
+      const msg = e instanceof Error ? e.message : String(e);
+      setGitError(msg);
+      setTimeout(() => setGitError(null), 5000);
+    }
+  }, [panels, activePanelIndex, recordingDevice, recording.active]);
+
   // Keyboard shortcuts
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      // When settings panel is open, only allow Cmd+, to close it
+      if (showSettings) {
+        if (e.key === "," && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          setShowSettings(false);
+        }
+        return;
+      }
+
       // When search palette is open, only handle Cmd+P to close it
       if (searchPaletteOpen) {
         if (e.key === "p" && (e.metaKey || e.ctrlKey)) {
           e.preventDefault();
           setSearchPaletteOpen(false);
         }
+        return;
+      }
+
+      // Cmd+, — open settings
+      if (e.key === "," && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setShowSettings((v) => !v);
         return;
       }
 
@@ -427,6 +643,9 @@ export default function App() {
           // Save and close (same as Cmd+Enter)
           activePanel.save();
         } else {
+          if (activePanelIndex > 0 && handleRecordingPanelClose(activePanelIndex)) {
+            return;
+          }
           activePanel.clear();
           // If not leftmost and now empty, close it
           if (activePanelIndex > 0) {
@@ -457,6 +676,7 @@ export default function App() {
       if (e.key === "w" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         if (panels.length <= 1) return;
+        if (handleRecordingPanelClose(activePanelIndex)) return;
         if (activePanel.isUserModified() && activePanel.hasContent()) {
           if (closeWarningIndex === activePanelIndex) {
             // Second press — confirm close, discard unsaved content
@@ -495,7 +715,9 @@ export default function App() {
           setDeleteWarning(false);
           activePanel.deleteNote().then(() => {
             if (panels.length > 1) {
-              closePanel(activePanelIndex);
+              if (!handleRecordingPanelClose(activePanelIndex)) {
+                closePanel(activePanelIndex);
+              }
             }
           });
         } else {
@@ -562,7 +784,7 @@ export default function App() {
         if (recording.active) {
           void stopRecording();
         } else {
-          void startRecording(recordingDevice ?? undefined);
+          void handleStartRecording();
         }
         return;
       }
@@ -676,7 +898,7 @@ export default function App() {
         }
       }
     },
-    [panels, activePanelIndex, closePanel, openNewPanelToRight, findPanelWithNote, openNoteToRight, vimEnabled, closeWarningIndex, deleteWarning, searchPaletteOpen, recording, recordingDevice],
+    [panels, activePanelIndex, closePanel, handleRecordingPanelClose, openNewPanelToRight, findPanelWithNote, openNoteToRight, vimEnabled, closeWarningIndex, deleteWarning, searchPaletteOpen, showSettings, recording, handleStartRecording],
   );
 
   const handleKeyUp = useCallback(
@@ -930,11 +1152,12 @@ export default function App() {
               vimEnabled={vimEnabled}
               onVimToggle={() => setVimEnabled((v) => !v)}
               recording={recording}
-              recordingProgress={recordingProgress}
-              onStartRecording={() => void startRecording(recordingDevice ?? undefined)}
+              processingProgress={processingProgressByPanel[panel.id] ?? null}
+              processingProgressByNote={processingProgressByNote}
+              recordingLocked={recording.active || recordingStartPending}
+              onStartRecording={() => void handleStartRecording(panel.id)}
               onStopRecording={() => void stopRecording()}
-              recordingDevice={recordingDevice}
-              onDeviceChange={handleDeviceChange}
+              isRecordingPanel={panel.id === recordingPanelId}
             />
           </div>
         </Fragment>
@@ -955,12 +1178,30 @@ export default function App() {
         <div className="close-warning-toast">Unsaved changes — press <kbd>{primaryModifier}</kbd> <kbd>W</kbd> again to close</div>,
         document.body,
       )}
+      {recordingCloseWarningIndex !== null && createPortal(
+        <div className="close-warning-toast">Recording in progress — close again to stop recording and close this panel</div>,
+        document.body,
+      )}
       {deleteWarning && createPortal(
         <div className="delete-warning-toast">Delete note? Press <kbd>{primaryModifier}</kbd> <kbd>D</kbd> again to confirm</div>,
         document.body,
       )}
       {gitError && createPortal(
         <div className="git-error-toast">{gitError}</div>,
+        document.body,
+      )}
+      {meetingReadyToast && createPortal(
+        <div
+          className="import-toast"
+          style={{ cursor: "pointer" }}
+          onClick={() => {
+            const activePanel = panelRefs.current.get(panels[activePanelIndex]?.id);
+            if (activePanel) activePanel.loadNote(meetingReadyToast);
+            setMeetingReadyToast(null);
+          }}
+        >
+          Meeting note ready — click to open
+        </div>,
         document.body,
       )}
       {searchPaletteOpen && createPortal(
@@ -991,14 +1232,29 @@ export default function App() {
         />,
         document.body,
       )}
-      {toolStatus && (!toolStatus.git || !toolStatus.qmd || !toolStatus.ollama || !toolStatus.ffmpeg || !toolStatus.whisper) && createPortal(
-        <div className="tool-status-indicator">
-          {!toolStatus.git && <span className="tool-missing">git not found</span>}
-          {!toolStatus.qmd && <span className="tool-missing">qmd not found</span>}
-          {!toolStatus.ollama && <span className="tool-missing">ollama not found</span>}
-          {!toolStatus.ffmpeg && <span className="tool-missing">ffmpeg not found</span>}
-          {!toolStatus.whisper && <span className="tool-missing">whisper not found</span>}
-        </div>,
+      {toolStatus && (() => {
+        const missingCount = [toolStatus.git, toolStatus.qmd, toolStatus.ollama, toolStatus.ffmpeg, toolStatus.whisper].filter((v) => !v).length;
+        if (missingCount === 0) return null;
+        return createPortal(
+          <button className="tool-status-indicator" onClick={() => setShowSettings(true)}>
+            <span className="tool-missing">{missingCount} tool{missingCount > 1 ? "s" : ""} missing</span>
+          </button>,
+          document.body,
+        );
+      })()}
+      {showSettings && toolStatus && createPortal(
+        <SettingsPanel
+          toolStatus={toolStatus}
+          recordingDevice={recordingDevice}
+          onDeviceChange={handleDeviceChange}
+          onRefreshTools={async () => {
+            try {
+              const status = await checkTools();
+              setToolStatus(status);
+            } catch { /* ignore */ }
+          }}
+          onClose={() => setShowSettings(false)}
+        />,
         document.body,
       )}
       {showHotkeys && createPortal(
@@ -1028,6 +1284,7 @@ export default function App() {
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>+</kbd><span>Zoom in</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>-</kbd><span>Zoom out</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>0</kbd><span>Reset zoom</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>,</kbd><span>Settings</span></div>
               {isMacOS()
                 ? <div className="hotkey-row"><kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>+</kbd><span>Show shortcuts</span></div>
                 : <div className="hotkey-row"><kbd>Ctrl</kbd> <kbd>/</kbd><span>Show shortcuts</span></div>

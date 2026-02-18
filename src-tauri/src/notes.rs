@@ -264,6 +264,65 @@ pub fn save_note(
     Ok(meta)
 }
 
+/// Append meeting summary/transcript to an existing note and ensure it has the `meeting` tag.
+pub fn append_meeting_data(
+    notes_dir: &str,
+    id: &str,
+    summary: &str,
+    transcript: &str,
+    index: &mut NoteIndex,
+) -> io::Result<NoteMetadata> {
+    let meta = index
+        .notes
+        .get(id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?
+        .clone();
+
+    let file_path = Path::new(notes_dir).join(&meta.path);
+    let raw = fs::read_to_string(&file_path)?;
+    let (raw_yaml, body) = parse_raw_yaml(&raw);
+
+    let mut tags = meta.tags.clone();
+    if !tags.iter().any(|t| t == "meeting") {
+        tags.push("meeting".to_string());
+    }
+
+    let has_summary = body.contains("\n## Summary");
+    let has_transcript = body.contains("\n## Transcript");
+    let content = if has_summary && has_transcript {
+        body
+    } else {
+        let trimmed = body.trim_end();
+        let separator = if trimmed.is_empty() { "" } else { "\n\n" };
+        format!(
+            "{trimmed}{separator}## Summary\n\n{summary}\n\n## Transcript\n\n{transcript}\n"
+        )
+    };
+
+    let modified = Local::now().to_rfc3339();
+    let frontmatter = build_frontmatter(
+        &meta.id,
+        &meta.created,
+        &modified,
+        &tags,
+        meta.starred,
+        Some(&meta.title),
+        raw_yaml.as_ref(),
+    );
+    let full_content = format!("{frontmatter}{content}");
+    fs::write(&file_path, full_content)?;
+
+    let updated = NoteMetadata {
+        modified,
+        tags,
+        ..meta
+    };
+    index.notes.insert(id.to_string(), updated.clone());
+    save_index(notes_dir, index)?;
+
+    Ok(updated)
+}
+
 /// Toggle the starred state of a note
 pub fn toggle_star(
     notes_dir: &str,

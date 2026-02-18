@@ -289,9 +289,9 @@ export async function listInputDevices(): Promise<InputDeviceInfo[]> {
   return [];
 }
 
-export async function startRecording(device?: string): Promise<string> {
+export async function startRecording(device?: string, noteId?: string): Promise<string> {
   if (isTauri()) {
-    return invoke<string>("start_recording", { device: device ?? null });
+    return invoke<string>("start_recording", { device: device ?? null, noteId: noteId ?? null });
   }
   throw new Error("Recording is only available in the desktop app");
 }
@@ -300,6 +300,23 @@ export async function stopRecording(): Promise<void> {
   if (isTauri()) {
     return invoke<void>("stop_recording");
   }
+}
+
+export async function checkPendingJobs(): Promise<void> {
+  if (isTauri()) {
+    return invoke<void>("check_pending_jobs");
+  }
+}
+
+export async function appendMeetingData(
+  id: string,
+  summary: string,
+  transcript: string,
+): Promise<NoteMetadata> {
+  if (isTauri()) {
+    return invoke<NoteMetadata>("append_meeting_data", { id, summary, transcript });
+  }
+  throw new Error("Append meeting data is only available in the desktop app");
 }
 
 export async function getRecordingState(): Promise<RecordingState> {
