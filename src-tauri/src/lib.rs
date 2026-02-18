@@ -1,10 +1,12 @@
 mod git_sync;
 mod notes;
 mod qmd;
+mod recording;
 
 use git_sync::GitSyncHandle;
 use notes::{NoteIndex, NoteMetadata};
 use qmd::QmdHandle;
+use recording::RecordingHandle;
 use std::sync::Mutex;
 use tauri::{Manager, RunEvent, State};
 
@@ -13,6 +15,7 @@ pub struct AppState {
     pub index: Mutex<NoteIndex>,
     pub git: Mutex<GitSyncHandle>,
     pub qmd: Mutex<QmdHandle>,
+    pub recording: Mutex<RecordingHandle>,
 }
 
 #[tauri::command]
@@ -42,6 +45,11 @@ fn set_notes_dir(
         old_qmd.shutdown();
     }
 
+    // Shut down old recording worker.
+    if let Ok(old_rec) = state.recording.lock() {
+        old_rec.shutdown();
+    }
+
     {
         let mut dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
         *dir = path.clone();
@@ -59,9 +67,14 @@ fn set_notes_dir(
     *git = new_git;
 
     // Start a new qmd worker for the new directory.
-    let new_qmd = QmdHandle::new(&path, app_handle);
+    let new_qmd = QmdHandle::new(&path, app_handle.clone());
     let mut qmd = state.qmd.lock().map_err(|e| e.to_string())?;
     *qmd = new_qmd;
+
+    // Start a new recording worker.
+    let new_rec = RecordingHandle::new(app_handle);
+    let mut rec = state.recording.lock().map_err(|e| e.to_string())?;
+    *rec = new_rec;
 
     Ok(())
 }
@@ -185,6 +198,33 @@ fn import_markdown_file(
     Ok(meta)
 }
 
+#[tauri::command]
+fn list_input_devices() -> Vec<recording::InputDeviceInfo> {
+    recording::list_input_devices()
+}
+
+#[tauri::command]
+fn start_recording(state: State<AppState>, device: Option<String>) -> Result<String, String> {
+    let note_id = uuid::Uuid::new_v4().to_string();
+    let notes_dir = state.notes_dir.lock().map_err(|e| e.to_string())?.clone();
+    let rec = state.recording.lock().map_err(|e| e.to_string())?;
+    rec.start(&note_id, &notes_dir, device);
+    Ok(note_id)
+}
+
+#[tauri::command]
+fn stop_recording(state: State<AppState>) -> Result<(), String> {
+    let rec = state.recording.lock().map_err(|e| e.to_string())?;
+    rec.stop();
+    Ok(())
+}
+
+#[tauri::command]
+fn get_recording_state(state: State<AppState>) -> Result<recording::RecordingState, String> {
+    let rec = state.recording.lock().map_err(|e| e.to_string())?;
+    Ok(rec.state())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let home = dirs_home();
@@ -198,12 +238,14 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let git = GitSyncHandle::new(&default_dir, handle.clone());
-            let qmd = QmdHandle::new(&default_dir, handle);
+            let qmd = QmdHandle::new(&default_dir, handle.clone());
+            let rec = RecordingHandle::new(handle);
             app.manage(AppState {
                 notes_dir: Mutex::new(default_dir),
                 index: Mutex::new(index),
                 git: Mutex::new(git),
                 qmd: Mutex::new(qmd),
+                recording: Mutex::new(rec),
             });
             Ok(())
         })
@@ -225,6 +267,10 @@ pub fn run() {
             qmd::get_related_notes,
             qmd::regenerate_tags,
             qmd::check_tools,
+            list_input_devices,
+            start_recording,
+            stop_recording,
+            get_recording_state,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -234,7 +280,11 @@ pub fn run() {
             let state = handle.state::<AppState>();
             let git = state.git.lock().ok().map(|g| g.clone());
             let qmd = state.qmd.lock().ok().map(|q| q.clone());
+            let rec = state.recording.lock().ok().map(|r| r.clone());
             drop(state);
+            if let Some(rec) = rec {
+                rec.shutdown();
+            }
             if let Some(git) = git {
                 git.flush_and_push();
             }

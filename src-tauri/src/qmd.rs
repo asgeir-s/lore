@@ -96,7 +96,7 @@ fn save_cache(path: &Path, cache: &RelatedCache) {
 
 /// Build an enriched PATH so that bundled macOS apps can find tools like qmd and ollama
 /// which are typically installed in locations not in the default app PATH.
-fn enriched_path() -> String {
+pub(crate) fn enriched_path() -> String {
     let base = std::env::var("PATH").unwrap_or_default();
     let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/default".to_string());
     let mut extra: Vec<String> = vec![
@@ -136,7 +136,7 @@ fn enriched_path() -> String {
     parts.join(":")
 }
 
-fn cmd(program: &str) -> Command {
+pub(crate) fn cmd(program: &str) -> Command {
     let mut c = Command::new(program);
     c.env("PATH", enriched_path());
     c
@@ -887,6 +887,8 @@ pub struct ToolStatus {
     pub git: bool,
     pub qmd: bool,
     pub ollama: bool,
+    pub ffmpeg: bool,
+    pub whisper: bool,
 }
 
 #[tauri::command]
@@ -901,9 +903,23 @@ pub async fn check_tools() -> ToolStatus {
     let qmd = qmd_available().await;
     let ollama = ollama_available().await;
 
-    eprintln!("qmd: tool check — git={git}, qmd={qmd}, ollama={ollama}");
+    let ffmpeg = cmd("ffmpeg")
+        .arg("-version")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
 
-    ToolStatus { git, qmd, ollama }
+    let whisper = cmd("whisper-cli")
+        .arg("--help")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    eprintln!("qmd: tool check — git={git}, qmd={qmd}, ollama={ollama}, ffmpeg={ffmpeg}, whisper={whisper}");
+
+    ToolStatus { git, qmd, ollama, ffmpeg, whisper }
 }
 
 #[cfg(test)]

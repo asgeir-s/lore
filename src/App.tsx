@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import { NotePanel } from "./NotePanel";
 import type { PanelHandle } from "./NotePanel";
 import { DragSplitter } from "./DragSplitter";
-import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile, getGitRemote, setGitRemote, dismissGitSetup, getNotesDir, setNotesDir, checkTools } from "./api";
+import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile, getGitRemote, setGitRemote, dismissGitSetup, getNotesDir, setNotesDir, checkTools, startRecording, stopRecording } from "./api";
+import type { RecordingState } from "./api";
 import type { ToolStatus } from "./api";
 import type { NoteMetadata, SortBy } from "./api";
 import { loadSavedTheme, saveTheme, applyThemeVars } from "./themes";
@@ -59,6 +60,9 @@ export default function App() {
   const gPendingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const [toolStatus, setToolStatus] = useState<ToolStatus | null>(null);
+  const [recording, setRecording] = useState<RecordingState>({ active: false, note_id: null, elapsed_seconds: 0, mic_level: 0, system_level: 0 });
+  const [recordingProgress, setRecordingProgress] = useState<string | null>(null);
+  const [recordingDevice, setRecordingDevice] = useState<string | null>(() => localStorage.getItem("recording-device"));
   const spacePendingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const primaryModifier = isMacOS() ? "⌘" : "Ctrl";
 
@@ -82,6 +86,15 @@ export default function App() {
     setThemeId(id);
     saveTheme(id);
     applyThemeVars(id);
+  }, []);
+
+  const handleDeviceChange = useCallback((device: string | null) => {
+    setRecordingDevice(device);
+    if (device) {
+      localStorage.setItem("recording-device", device);
+    } else {
+      localStorage.removeItem("recording-device");
+    }
   }, []);
 
   // Persist vim mode
@@ -159,6 +172,12 @@ export default function App() {
   useEffect(() => {
     let unlistenGitError: (() => void) | undefined;
     let unlistenNotesChanged: (() => void) | undefined;
+    let unlistenRecStarted: (() => void) | undefined;
+    let unlistenRecTick: (() => void) | undefined;
+    let unlistenRecStopped: (() => void) | undefined;
+    let unlistenRecProgress: (() => void) | undefined;
+    let unlistenRecComplete: (() => void) | undefined;
+    let unlistenRecError: (() => void) | undefined;
 
     (async () => {
       try {
@@ -173,6 +192,39 @@ export default function App() {
             void panel.refreshLoadedNote();
           }
         });
+        unlistenRecStarted = await listen<string>("recording-started", (event) => {
+          setRecording({ active: true, note_id: event.payload, elapsed_seconds: 0, mic_level: 0, system_level: 0 });
+          setRecordingProgress(null);
+        });
+        unlistenRecTick = await listen<{ elapsed_seconds: number; mic_level: number; system_level: number }>("recording-tick", (event) => {
+          setRecording((prev) => ({
+            ...prev,
+            elapsed_seconds: event.payload.elapsed_seconds,
+            mic_level: event.payload.mic_level,
+            system_level: event.payload.system_level,
+          }));
+        });
+        unlistenRecStopped = await listen("recording-stopped", () => {
+          setRecording((prev) => ({ ...prev, active: false }));
+          setRecordingProgress("Processing...");
+        });
+        unlistenRecProgress = await listen<{ stage: string; detail: string }>("recording-progress", (event) => {
+          setRecordingProgress(event.payload.detail);
+        });
+        unlistenRecComplete = await listen<string>("recording-complete", (event) => {
+          setRecordingProgress(null);
+          setRecording({ active: false, note_id: null, elapsed_seconds: 0, mic_level: 0, system_level: 0 });
+          void refreshSharedState();
+          // Load the meeting note in the active panel.
+          const activePanel = panelRefs.current.get(panels[activePanelIndex]?.id);
+          if (activePanel) {
+            activePanel.loadNote(event.payload);
+          }
+        });
+        unlistenRecError = await listen<string>("recording-error", (event) => {
+          setGitError(event.payload); // Reuse the error toast
+          setTimeout(() => setGitError(null), 5000);
+        });
       } catch {
         // Not in Tauri
       }
@@ -181,6 +233,12 @@ export default function App() {
     return () => {
       unlistenGitError?.();
       unlistenNotesChanged?.();
+      unlistenRecStarted?.();
+      unlistenRecTick?.();
+      unlistenRecStopped?.();
+      unlistenRecProgress?.();
+      unlistenRecComplete?.();
+      unlistenRecError?.();
     };
   }, [refreshSharedState]);
 
@@ -498,6 +556,16 @@ export default function App() {
         setSearchPaletteOpen(true);
         return;
       }
+      // Cmd+Shift+R — toggle recording
+      if (e.key === "R" && e.shiftKey && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        if (recording.active) {
+          void stopRecording();
+        } else {
+          void startRecording(recordingDevice ?? undefined);
+        }
+        return;
+      }
       // Tab to leave the editor and enter list navigation mode
       const editorFocused = !!document.activeElement?.closest(".cm-editor");
       const inputFocused = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement;
@@ -608,7 +676,7 @@ export default function App() {
         }
       }
     },
-    [panels, activePanelIndex, closePanel, openNewPanelToRight, findPanelWithNote, openNoteToRight, vimEnabled, closeWarningIndex, deleteWarning, searchPaletteOpen],
+    [panels, activePanelIndex, closePanel, openNewPanelToRight, findPanelWithNote, openNoteToRight, vimEnabled, closeWarningIndex, deleteWarning, searchPaletteOpen, recording, recordingDevice],
   );
 
   const handleKeyUp = useCallback(
@@ -861,6 +929,12 @@ export default function App() {
               themeId={themeId}
               vimEnabled={vimEnabled}
               onVimToggle={() => setVimEnabled((v) => !v)}
+              recording={recording}
+              recordingProgress={recordingProgress}
+              onStartRecording={() => void startRecording(recordingDevice ?? undefined)}
+              onStopRecording={() => void stopRecording()}
+              recordingDevice={recordingDevice}
+              onDeviceChange={handleDeviceChange}
             />
           </div>
         </Fragment>
@@ -917,11 +991,13 @@ export default function App() {
         />,
         document.body,
       )}
-      {toolStatus && (!toolStatus.git || !toolStatus.qmd || !toolStatus.ollama) && createPortal(
+      {toolStatus && (!toolStatus.git || !toolStatus.qmd || !toolStatus.ollama || !toolStatus.ffmpeg || !toolStatus.whisper) && createPortal(
         <div className="tool-status-indicator">
           {!toolStatus.git && <span className="tool-missing">git not found</span>}
           {!toolStatus.qmd && <span className="tool-missing">qmd not found</span>}
           {!toolStatus.ollama && <span className="tool-missing">ollama not found</span>}
+          {!toolStatus.ffmpeg && <span className="tool-missing">ffmpeg not found</span>}
+          {!toolStatus.whisper && <span className="tool-missing">whisper not found</span>}
         </div>,
         document.body,
       )}
@@ -942,6 +1018,7 @@ export default function App() {
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>L</kbd><span>Focus right panel</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>W</kbd><span>Close rightmost panel</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>Click</kbd><span>Open in new panel</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>⇧</kbd> <kbd>R</kbd><span>Toggle recording</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>J</kbd><span>Select next note</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>K</kbd><span>Select previous note</span></div>
               <div className="hotkey-row"><kbd>J</kbd> / <kbd>K</kbd><span>Scroll down / up</span></div>

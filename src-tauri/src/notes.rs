@@ -572,31 +572,39 @@ pub fn rebuild_index(notes_dir: &str) -> io::Result<NoteIndex> {
         return Ok(index);
     }
 
-    let pattern = format!("{}/*.md", notes_dir);
-    if let Ok(entries) = glob::glob(&pattern) {
-        for entry in entries.flatten() {
-            if let Ok(content) = fs::read_to_string(&entry) {
-                let (fm, body) = parse_frontmatter(&content);
-                if let Some(fm) = fm {
-                    if let Some(id) = fm.id {
-                        let title = fm.title.unwrap_or_else(|| extract_title(&body));
-                        let filename = entry
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string();
-                        let created = fm.created.unwrap_or_default();
-                        let modified = fm.modified.unwrap_or_else(|| created.clone());
-                        let meta = NoteMetadata {
-                            id: id.clone(),
-                            path: filename,
-                            title,
-                            created,
-                            modified,
-                            tags: fm.tags.unwrap_or_default(),
-                            starred: fm.starred.unwrap_or(false),
-                        };
-                        index.notes.insert(id, meta);
+    // Scan both top-level and meetings/ subdirectory.
+    let patterns = [
+        format!("{}/*.md", notes_dir),
+        format!("{}/meetings/*.md", notes_dir),
+    ];
+    for pattern in &patterns {
+        if let Ok(entries) = glob::glob(pattern) {
+            for entry in entries.flatten() {
+                if let Ok(content) = fs::read_to_string(&entry) {
+                    let (fm, body) = parse_frontmatter(&content);
+                    if let Some(fm) = fm {
+                        if let Some(id) = fm.id {
+                            let title = fm.title.unwrap_or_else(|| extract_title(&body));
+                            // Store relative path from notes_dir.
+                            let rel_path = entry
+                                .strip_prefix(notes_dir)
+                                .unwrap_or(&entry)
+                                .to_string_lossy()
+                                .trim_start_matches('/')
+                                .to_string();
+                            let created = fm.created.unwrap_or_default();
+                            let modified = fm.modified.unwrap_or_else(|| created.clone());
+                            let meta = NoteMetadata {
+                                id: id.clone(),
+                                path: rel_path,
+                                title,
+                                created,
+                                modified,
+                                tags: fm.tags.unwrap_or_default(),
+                                starred: fm.starred.unwrap_or(false),
+                            };
+                            index.notes.insert(id, meta);
+                        }
                     }
                 }
             }
@@ -605,6 +613,11 @@ pub fn rebuild_index(notes_dir: &str) -> io::Result<NoteIndex> {
 
     save_index(notes_dir, &index)?;
     Ok(index)
+}
+
+/// Save the index to .dump-index.json (public for use by recording module)
+pub fn save_index_pub(notes_dir: &str, index: &NoteIndex) -> io::Result<()> {
+    save_index(notes_dir, index)
 }
 
 /// Save the index to .dump-index.json

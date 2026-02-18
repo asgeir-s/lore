@@ -23,6 +23,16 @@ Capture first, organize never. Notes live as flat markdown files. Structure emer
 - [Git](https://git-scm.com/) (for automatic note version history)
 - System dependencies for Tauri v2 (see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/))
 
+### macOS setup (optional tools)
+
+Install ffmpeg, whisper-cpp, and ollama for meeting recording and AI features:
+
+```bash
+npm run setup-macos
+```
+
+This installs ffmpeg (audio processing), whisper-cpp (transcription), ollama (summarization/auto-tagging), and downloads a whisper model. All are optional — the app works without them but meeting recording requires ffmpeg + whisper-cpp.
+
 ### Ubuntu setup (first time only)
 
 Install Linux system packages required by Tauri:
@@ -88,7 +98,24 @@ Notes are stored as flat files in `~/dump/` (configurable).
 | `Escape`         | Clear textarea, discard content |
 | `Cmd/Ctrl+T`     | Toggle tag input                |
 | `Cmd/Ctrl+Click` | Open note in new panel          |
+| `Cmd/Ctrl+Shift+R` | Toggle meeting recording      |
 | `Ctrl+Cmd++`     | Show shortcut list              |
+
+## Meeting Recording
+
+Record meetings directly in the app, then get an auto-generated note with a summary and full transcript.
+
+1. Press `Cmd+Shift+R` (or click Record) to start
+2. Press again to stop — the app processes the audio automatically:
+   - **ffmpeg** mixes system + mic audio into a single WAV
+   - **whisper-cpp** transcribes the audio with timestamps
+   - **ollama** summarizes the transcript into key points
+3. A meeting note appears with a Summary/Transcript toggle view
+
+Meeting notes live in `meetings/` inside your notes folder. Audio files are in `meetings/.audio/` (git-ignored).
+
+**Required:** `ffmpeg`, `whisper-cpp` (install via `npm run setup-macos`)
+**Optional:** `ollama` with a model (for AI summaries — without it you still get the transcript)
 
 ## Slash Commands
 

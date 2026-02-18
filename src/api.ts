@@ -256,13 +256,57 @@ export interface ToolStatus {
   git: boolean;
   qmd: boolean;
   ollama: boolean;
+  ffmpeg: boolean;
+  whisper: boolean;
 }
 
 export async function checkTools(): Promise<ToolStatus> {
   if (isTauri()) {
     return invoke<ToolStatus>("check_tools");
   }
-  return { git: false, qmd: false, ollama: false };
+  return { git: false, qmd: false, ollama: false, ffmpeg: false, whisper: false };
+}
+
+// ── Recording API ──────────────────────────────────────────────────
+
+export interface RecordingState {
+  active: boolean;
+  note_id: string | null;
+  elapsed_seconds: number;
+  mic_level: number;
+  system_level: number;
+}
+
+export interface InputDeviceInfo {
+  name: string;
+  is_default: boolean;
+}
+
+export async function listInputDevices(): Promise<InputDeviceInfo[]> {
+  if (isTauri()) {
+    return invoke<InputDeviceInfo[]>("list_input_devices");
+  }
+  return [];
+}
+
+export async function startRecording(device?: string): Promise<string> {
+  if (isTauri()) {
+    return invoke<string>("start_recording", { device: device ?? null });
+  }
+  throw new Error("Recording is only available in the desktop app");
+}
+
+export async function stopRecording(): Promise<void> {
+  if (isTauri()) {
+    return invoke<void>("stop_recording");
+  }
+}
+
+export async function getRecordingState(): Promise<RecordingState> {
+  if (isTauri()) {
+    return invoke<RecordingState>("get_recording_state");
+  }
+  return { active: false, note_id: null, elapsed_seconds: 0, mic_level: 0, system_level: 0 };
 }
 
 export async function regenerateTags(id: string): Promise<NoteMetadata> {

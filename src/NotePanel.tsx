@@ -19,8 +19,9 @@ import {
   toggleStar,
   getRelatedNotes,
   regenerateTags,
+  listInputDevices,
 } from "./api";
-import type { NoteMetadata, SortBy } from "./api";
+import type { NoteMetadata, SortBy, RecordingState, InputDeviceInfo } from "./api";
 
 export interface PanelHandle {
   loadNote: (noteId: string) => Promise<void>;
@@ -57,6 +58,12 @@ interface NotePanelProps {
   themeId: string;
   vimEnabled: boolean;
   onVimToggle: () => void;
+  recording?: RecordingState;
+  recordingProgress?: string | null;
+  onStartRecording?: () => void;
+  onStopRecording?: () => void;
+  recordingDevice?: string | null;
+  onDeviceChange?: (device: string | null) => void;
 }
 
 export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
@@ -75,6 +82,12 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       themeId,
       vimEnabled,
       onVimToggle,
+      recording,
+      recordingProgress,
+      onStartRecording,
+      onStopRecording,
+      recordingDevice,
+      onDeviceChange,
     },
     ref,
   ) => {
@@ -86,9 +99,13 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     const [precomputedRelated, setPrecomputedRelated] = useState<NoteMetadata[]>([]);
     const [regeneratingTags, setRegeneratingTags] = useState(false);
     const [relatedLoading, setRelatedLoading] = useState(false);
+    const [meetingView, setMeetingView] = useState<"summary" | "transcript">("summary");
     const [userModified, setUserModified] = useState(independent ?? false);
     const [highlightIndex, setHighlightIndex] = useState(-1);
     const [starred, setStarred] = useState(false);
+    const [devicePickerOpen, setDevicePickerOpen] = useState(false);
+    const [devices, setDevices] = useState<InputDeviceInfo[]>([]);
+    const devicePickerRef = useRef<HTMLDivElement>(null);
     const editorRef = useRef<{ focus: () => void; blur: () => void; clear: () => void } | null>(
       null,
     );
@@ -384,6 +401,32 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       }
     }, [loadedNoteId, regeneratingTags, onSaved]);
 
+    const handleDevicePickerToggle = useCallback(async () => {
+      if (devicePickerOpen) {
+        setDevicePickerOpen(false);
+        return;
+      }
+      try {
+        const devs = await listInputDevices();
+        setDevices(devs);
+      } catch {
+        setDevices([]);
+      }
+      setDevicePickerOpen(true);
+    }, [devicePickerOpen]);
+
+    // Close device picker on click outside
+    useEffect(() => {
+      if (!devicePickerOpen) return;
+      const handler = (e: MouseEvent) => {
+        if (devicePickerRef.current && !devicePickerRef.current.contains(e.target as Node)) {
+          setDevicePickerOpen(false);
+        }
+      };
+      document.addEventListener("mousedown", handler);
+      return () => document.removeEventListener("mousedown", handler);
+    }, [devicePickerOpen]);
+
     const listLabel = loadedNoteId ? "Related" : "Recent";
 
     // Reset highlight when notes list changes
@@ -465,11 +508,98 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
               Starred
             </div>
           )}
+          {recording?.active ? (
+            <button className="record-btn recording" onClick={onStopRecording}>
+              <span className="rec-dot" />
+              {String(Math.floor(recording.elapsed_seconds / 60)).padStart(1, "0")}:{String(recording.elapsed_seconds % 60).padStart(2, "0")}
+              <span className="level-bars">
+                <span className="level-bar mic" style={{ height: `${Math.min(100, (recording.mic_level ?? 0) * 300)}%` }} title="Mic" />
+                <span className="level-bar system" style={{ height: `${Math.min(100, (recording.system_level ?? 0) * 300)}%` }} title="System" />
+              </span>
+              {" "}Stop
+            </button>
+          ) : recordingProgress ? (
+            <span className="recording-progress">{recordingProgress}</span>
+          ) : (
+            <>
+              <div className="device-picker" ref={devicePickerRef}>
+                <button
+                  className="device-picker-btn"
+                  onClick={handleDevicePickerToggle}
+                  title={recordingDevice ?? "Auto-detect microphone"}
+                >
+                  {recordingDevice
+                    ? recordingDevice.length > 20
+                      ? recordingDevice.slice(0, 18) + "..."
+                      : recordingDevice
+                    : "Mic: Auto"}
+                </button>
+                {devicePickerOpen && (
+                  <div className="device-picker-dropdown">
+                    <button
+                      className={`device-item ${!recordingDevice ? "active" : ""}`}
+                      onClick={() => {
+                        onDeviceChange?.(null);
+                        setDevicePickerOpen(false);
+                      }}
+                    >
+                      Auto-detect
+                    </button>
+                    {devices.map((d) => (
+                      <button
+                        key={d.name}
+                        className={`device-item ${recordingDevice === d.name ? "active" : ""}`}
+                        onClick={() => {
+                          onDeviceChange?.(d.name);
+                          setDevicePickerOpen(false);
+                        }}
+                      >
+                        {d.name}
+                        {d.is_default && <span className="device-default-badge">default</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button className="record-btn" onClick={onStartRecording}>
+                Record
+              </button>
+            </>
+          )}
         </div>
         <div style={{ display: editing ? undefined : 'none' }}>
           <Editor ref={editorRef} content={content} onChange={handleChange} onSave={handleSave} themeId={themeId} vimEnabled={vimEnabled} onVimToggle={onVimToggle} onNoteNavigate={onNoteNavigate} recentNotes={recentNotes} />
         </div>
-        {!editing && <MarkdownView content={content} onEdit={handleEdit} onNoteNavigate={onNoteNavigate} />}
+        {!editing && (() => {
+          const hasSummary = content.includes("## Summary") && content.includes("## Transcript");
+          if (hasSummary) {
+            const summaryMatch = content.match(/## Summary\n+([\s\S]*?)(?=\n## Transcript)/);
+            const transcriptMatch = content.match(/## Transcript\n+([\s\S]*?)$/);
+            const titleMatch = content.match(/^(# .+\n)/);
+            const titlePart = titleMatch ? titleMatch[1] : "";
+            const summaryContent = summaryMatch ? summaryMatch[1].trim() : "";
+            const transcriptContent = transcriptMatch ? transcriptMatch[1].trim() : "";
+            const viewContent = meetingView === "summary"
+              ? `${titlePart}\n${summaryContent}`
+              : `${titlePart}\n${transcriptContent}`;
+            return (
+              <>
+                <div className="meeting-view-toggle">
+                  <button
+                    className={meetingView === "summary" ? "active" : ""}
+                    onClick={() => setMeetingView("summary")}
+                  >Summary</button>
+                  <button
+                    className={meetingView === "transcript" ? "active" : ""}
+                    onClick={() => setMeetingView("transcript")}
+                  >Transcript</button>
+                </div>
+                <MarkdownView content={viewContent} onEdit={handleEdit} onNoteNavigate={onNoteNavigate} />
+              </>
+            );
+          }
+          return <MarkdownView content={content} onEdit={handleEdit} onNoteNavigate={onNoteNavigate} />;
+        })()}
         <div className="save-hint">
           {/Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
             ? <><kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>+</kbd> shortcuts</>

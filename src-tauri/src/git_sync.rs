@@ -671,7 +671,7 @@ async fn ensure_git_repo(dir: &Path) -> Result<(), String> {
     if !gitignore.exists() {
         std::fs::write(
             &gitignore,
-            ".dump-index.json\n.DS_Store\n*.swp\n*.tmp\n",
+            ".dump-index.json\n.DS_Store\n*.swp\n*.tmp\nmeetings/.audio/\n",
         )
         .map_err(|e| format!("write .gitignore: {e}"))?;
     }

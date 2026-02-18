@@ -9,6 +9,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "setup-macos": "bash scripts/setup-macos.sh",
     "setup-ubuntu": "bash scripts/setup-ubuntu.sh",
     "install-app": "bash scripts/install-app.sh",
     "install-app:macos": "bash scripts/install-macos.sh",
