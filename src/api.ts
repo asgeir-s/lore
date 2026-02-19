@@ -44,7 +44,12 @@ export async function saveNote(
   title?: string | null,
 ): Promise<NoteMetadata> {
   if (isTauri()) {
-    return invoke<NoteMetadata>("save_note", { id, content, tags, title: title ?? null });
+    return invoke<NoteMetadata>("save_note", {
+      id,
+      content,
+      tags,
+      title: title ?? null,
+    });
   }
   // Fallback for web dev
   const noteId = id ?? generateId();
@@ -266,7 +271,13 @@ export async function checkTools(): Promise<ToolStatus> {
   if (isTauri()) {
     return invoke<ToolStatus>("check_tools");
   }
-  return { git: false, qmd: false, ollama: false, ffmpeg: false, whisper: false };
+  return {
+    git: false,
+    qmd: false,
+    ollama: false,
+    ffmpeg: false,
+    whisper: false,
+  };
 }
 
 export async function openToolInstaller(tool: InstallToolKey): Promise<void> {
@@ -298,9 +309,15 @@ export async function listInputDevices(): Promise<InputDeviceInfo[]> {
   return [];
 }
 
-export async function startRecording(device?: string, noteId?: string): Promise<string> {
+export async function startRecording(
+  device?: string,
+  noteId?: string,
+): Promise<string> {
   if (isTauri()) {
-    return invoke<string>("start_recording", { device: device ?? null, noteId: noteId ?? null });
+    return invoke<string>("start_recording", {
+      device: device ?? null,
+      noteId: noteId ?? null,
+    });
   }
   throw new Error("Recording is only available in the desktop app");
 }
@@ -323,7 +340,11 @@ export async function appendMeetingData(
   transcript: string,
 ): Promise<NoteMetadata> {
   if (isTauri()) {
-    return invoke<NoteMetadata>("append_meeting_data", { id, summary, transcript });
+    return invoke<NoteMetadata>("append_meeting_data", {
+      id,
+      summary,
+      transcript,
+    });
   }
   throw new Error("Append meeting data is only available in the desktop app");
 }
@@ -346,7 +367,13 @@ export async function getRecordingState(): Promise<RecordingState> {
   if (isTauri()) {
     return invoke<RecordingState>("get_recording_state");
   }
-  return { active: false, note_id: null, elapsed_seconds: 0, mic_level: 0, system_level: 0 };
+  return {
+    active: false,
+    note_id: null,
+    elapsed_seconds: 0,
+    mic_level: 0,
+    system_level: 0,
+  };
 }
 
 export async function regenerateTags(id: string): Promise<NoteMetadata> {

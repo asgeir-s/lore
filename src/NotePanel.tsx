@@ -102,18 +102,24 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     const [loadedNoteId, setLoadedNoteId] = useState<string | null>(null);
     const [tags, setTags] = useState<string[]>([]);
     const [showTagInput, setShowTagInput] = useState(false);
-    const [precomputedRelated, setPrecomputedRelated] = useState<NoteMetadata[]>([]);
+    const [precomputedRelated, setPrecomputedRelated] = useState<
+      NoteMetadata[]
+    >([]);
     const [regeneratingTags, setRegeneratingTags] = useState(false);
     const [retranscribingNote, setRetranscribingNote] = useState(false);
     const [resummarizingNote, setResummarizingNote] = useState(false);
     const [relatedLoading, setRelatedLoading] = useState(false);
-    const [meetingView, setMeetingView] = useState<"notes" | "summary" | "transcript">("notes");
+    const [meetingView, setMeetingView] = useState<
+      "notes" | "summary" | "transcript"
+    >("notes");
     const [userModified, setUserModified] = useState(independent ?? false);
     const [highlightIndex, setHighlightIndex] = useState(-1);
     const [starred, setStarred] = useState(false);
-    const editorRef = useRef<{ focus: () => void; blur: () => void; clear: () => void } | null>(
-      null,
-    );
+    const editorRef = useRef<{
+      focus: () => void;
+      blur: () => void;
+      clear: () => void;
+    } | null>(null);
     const contentRef = useRef("");
     const titleRef = useRef("");
     const tagsRef = useRef<string[]>([]);
@@ -128,8 +134,10 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     const editing = userModified || !loadedNoteId;
     const isTyping = editing && content.trim().length > 0;
     const effectiveProcessingProgress =
-      processingProgress
-      ?? (loadedNoteId ? (processingProgressByNote?.[loadedNoteId] ?? null) : null);
+      processingProgress ??
+      (loadedNoteId
+        ? (processingProgressByNote?.[loadedNoteId] ?? null)
+        : null);
 
     useEffect(() => {
       contentRef.current = content;
@@ -201,7 +209,9 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       if (!content.trim()) return;
       try {
         const isNew = !loadedNoteId;
-        const tagsChanged = isNew || JSON.stringify(tags) !== JSON.stringify(savedTagsRef.current);
+        const tagsChanged =
+          isNew ||
+          JSON.stringify(tags) !== JSON.stringify(savedTagsRef.current);
         const meta = await saveNote(loadedNoteId, content, tags, title || null);
         setTitle(meta.title);
         titleManuallyEditedRef.current = false;
@@ -254,10 +264,10 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
                 savedTagsRef.current = merged;
               }
               if (
-                !titleManuallyEditedRef.current
-                && isAutoMeetingTitle(titleRef.current)
-                && isAutoMeetingTitle(note.title)
-                && note.title !== titleRef.current
+                !titleManuallyEditedRef.current &&
+                isAutoMeetingTitle(titleRef.current) &&
+                isAutoMeetingTitle(note.title) &&
+                note.title !== titleRef.current
               ) {
                 setTitle(note.title);
               }
@@ -284,7 +294,12 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           const tagsNow = tagsRef.current;
           const titleNow = titleRef.current;
           const shouldStayEditing = true;
-          const meta = await saveNote(null, contentNow, tagsNow, titleNow || null);
+          const meta = await saveNote(
+            null,
+            contentNow,
+            tagsNow,
+            titleNow || null,
+          );
           setTitle(meta.title);
           titleManuallyEditedRef.current = false;
           setLoadedNoteId(meta.id);
@@ -401,7 +416,11 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             }
             // Delegate to the backend command so it reads from disk (preserving any
             // QMD-generated tags) and generates a proper title.
-            const meta = await appendMeetingDataApi(noteIdNow, summary, transcript);
+            const meta = await appendMeetingDataApi(
+              noteIdNow,
+              summary,
+              transcript,
+            );
             const note = await getNote(noteIdNow);
             setContent(note.content);
             setTitle(meta.title);
@@ -415,7 +434,22 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           }
         },
       }),
-      [loadNote, loadNoteInternal, clearPanel, handleSave, userModified, loadedNoteId, content, title, tags, onSaved, displayedNotes, highlightIndex, onNoteClick, isAutoMeetingTitle],
+      [
+        loadNote,
+        loadNoteInternal,
+        clearPanel,
+        handleSave,
+        userModified,
+        loadedNoteId,
+        content,
+        title,
+        tags,
+        onSaved,
+        displayedNotes,
+        highlightIndex,
+        onNoteClick,
+        isAutoMeetingTitle,
+      ],
     );
 
     // Load initial note on mount
@@ -436,48 +470,58 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       }
       let cancelled = false;
       setRelatedLoading(true);
-      getRelatedNotes(loadedNoteId).then((results) => {
-        if (!cancelled) {
-          setPrecomputedRelated(results);
-          setRelatedLoading(false);
-        }
-      }).catch(() => {
-        if (!cancelled) {
-          setPrecomputedRelated([]);
-          setRelatedLoading(false);
-        }
-      });
-      return () => { cancelled = true; };
+      getRelatedNotes(loadedNoteId)
+        .then((results) => {
+          if (!cancelled) {
+            setPrecomputedRelated(results);
+            setRelatedLoading(false);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setPrecomputedRelated([]);
+            setRelatedLoading(false);
+          }
+        });
+      return () => {
+        cancelled = true;
+      };
     }, [loadedNoteId]);
 
     // Listen for backend QMD events.
     useEffect(() => {
       let cleanups: (() => void)[] = [];
       let cancelled = false;
-      import("@tauri-apps/api/event").then(({ listen }) => {
-        if (cancelled) return;
-        listen<string[]>("qmd-processing", (event) => {
-          const currentId = loadedNoteIdRef.current;
-          if (currentId && event.payload.includes(currentId)) {
-            setRelatedLoading(true);
-          }
-        }).then((unlisten) => {
-          if (cancelled) unlisten(); else cleanups.push(unlisten);
-        });
-        listen("related-notes-changed", () => {
-          const currentId = loadedNoteIdRef.current;
-          if (currentId) {
-            getRelatedNotes(currentId).then((results) => {
-              setPrecomputedRelated(results);
-              setRelatedLoading(false);
-            }).catch(() => {
-              setRelatedLoading(false);
-            });
-          }
-        }).then((unlisten) => {
-          if (cancelled) unlisten(); else cleanups.push(unlisten);
-        });
-      }).catch(() => {});
+      import("@tauri-apps/api/event")
+        .then(({ listen }) => {
+          if (cancelled) return;
+          listen<string[]>("qmd-processing", (event) => {
+            const currentId = loadedNoteIdRef.current;
+            if (currentId && event.payload.includes(currentId)) {
+              setRelatedLoading(true);
+            }
+          }).then((unlisten) => {
+            if (cancelled) unlisten();
+            else cleanups.push(unlisten);
+          });
+          listen("related-notes-changed", () => {
+            const currentId = loadedNoteIdRef.current;
+            if (currentId) {
+              getRelatedNotes(currentId)
+                .then((results) => {
+                  setPrecomputedRelated(results);
+                  setRelatedLoading(false);
+                })
+                .catch(() => {
+                  setRelatedLoading(false);
+                });
+            }
+          }).then((unlisten) => {
+            if (cancelled) unlisten();
+            else cleanups.push(unlisten);
+          });
+        })
+        .catch(() => {});
       return () => {
         cancelled = true;
         cleanups.forEach((fn) => fn());
@@ -501,20 +545,23 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       requestAnimationFrame(() => editorRef.current?.focus());
     }, []);
 
-    const regenerateTagsForNote = useCallback(async (noteId: string) => {
-      setRegeneratingTags(true);
-      try {
-        const updated = await regenerateTags(noteId);
-        if (loadedNoteIdRef.current !== noteId) return;
-        setTags(updated.tags);
-        savedTagsRef.current = updated.tags;
-        await onSaved();
-      } catch (e) {
-        console.error("Failed to regenerate tags:", e);
-      } finally {
-        setRegeneratingTags(false);
-      }
-    }, [onSaved]);
+    const regenerateTagsForNote = useCallback(
+      async (noteId: string) => {
+        setRegeneratingTags(true);
+        try {
+          const updated = await regenerateTags(noteId);
+          if (loadedNoteIdRef.current !== noteId) return;
+          setTags(updated.tags);
+          savedTagsRef.current = updated.tags;
+          await onSaved();
+        } catch (e) {
+          console.error("Failed to regenerate tags:", e);
+        } finally {
+          setRegeneratingTags(false);
+        }
+      },
+      [onSaved],
+    );
 
     const handleRegenerateTags = useCallback(async () => {
       if (!loadedNoteId || regeneratingTags) return;
@@ -570,42 +617,50 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     }, [displayedNotes]);
 
     return (
-      <div
-        className="note-panel"
-        onPointerDown={onFocus}
-      >
+      <div className="note-panel" onPointerDown={onFocus}>
         {showTagInput && (
-          <div className="metadata-panel" onKeyDown={async (e) => {
-            if (e.key === "Enter" && e.metaKey) {
-              e.preventDefault();
-              const pending = tagInputRef.current?.flush();
-              setShowTagInput(false);
-              if (pending) {
-                // flush() updates React state (async), but handleSave
-                // captures the old tags.  Save directly with the
-                // updated tag list.
-                const updatedTags = tags.includes(pending) ? tags : [...tags, pending];
-                setTags(updatedTags);
-                if (!content.trim()) return;
-                try {
-                  const meta = await saveNote(loadedNoteId, content, updatedTags, title || null);
-                  setTitle(meta.title);
-                  titleManuallyEditedRef.current = false;
-                  setLoadedNoteId(meta.id);
-                  loadedNoteIdRef.current = meta.id;
-                  savedTagsRef.current = updatedTags;
-                  setUserModified(false);
-                  setRelatedLoading(true);
-                  await onSaved();
-                  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-                } catch (err) {
-                  console.error("Failed to save note:", err);
+          <div
+            className="metadata-panel"
+            onKeyDown={async (e) => {
+              if (e.key === "Enter" && e.metaKey) {
+                e.preventDefault();
+                const pending = tagInputRef.current?.flush();
+                setShowTagInput(false);
+                if (pending) {
+                  // flush() updates React state (async), but handleSave
+                  // captures the old tags.  Save directly with the
+                  // updated tag list.
+                  const updatedTags = tags.includes(pending)
+                    ? tags
+                    : [...tags, pending];
+                  setTags(updatedTags);
+                  if (!content.trim()) return;
+                  try {
+                    const meta = await saveNote(
+                      loadedNoteId,
+                      content,
+                      updatedTags,
+                      title || null,
+                    );
+                    setTitle(meta.title);
+                    titleManuallyEditedRef.current = false;
+                    setLoadedNoteId(meta.id);
+                    loadedNoteIdRef.current = meta.id;
+                    savedTagsRef.current = updatedTags;
+                    setUserModified(false);
+                    setRelatedLoading(true);
+                    await onSaved();
+                    if (document.activeElement instanceof HTMLElement)
+                      document.activeElement.blur();
+                  } catch (err) {
+                    console.error("Failed to save note:", err);
+                  }
+                } else {
+                  handleSave();
                 }
-              } else {
-                handleSave();
               }
-            }
-          }}>
+            }}
+          >
             <input
               className="title-input"
               type="text"
@@ -618,7 +673,12 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
               }}
             />
             <div className="tag-row">
-              <TagInput ref={tagInputRef} tags={tags} allTags={allTags} onChange={setTags} />
+              <TagInput
+                ref={tagInputRef}
+                tags={tags}
+                allTags={allTags}
+                onChange={setTags}
+              />
               {loadedNoteId && (
                 <button
                   className="regenerate-tags-btn"
@@ -626,7 +686,11 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
                   disabled={regeneratingTags}
                   title="Regenerate tags from content"
                 >
-                  {regeneratingTags ? <span className="related-loading">...</span> : "↻"}
+                  {regeneratingTags ? (
+                    <span className="related-loading">...</span>
+                  ) : (
+                    "↻"
+                  )}
                 </button>
               )}
             </div>
@@ -646,93 +710,173 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             </div>
           )}
           {recording?.active && isRecordingPanel ? (
-            <button className="record-btn recording" onClick={onStopRecording} style={{ marginLeft: "auto" }}>
+            <button
+              className="record-btn recording"
+              onClick={onStopRecording}
+              style={{ marginLeft: "auto" }}
+            >
               <span className="rec-dot" />
-              <span style={{ fontVariantNumeric: "tabular-nums" }}>{String(Math.floor(recording.elapsed_seconds / 60)).padStart(1, "0")}:{String(recording.elapsed_seconds % 60).padStart(2, "0")}</span>
+              <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                {String(Math.floor(recording.elapsed_seconds / 60)).padStart(
+                  1,
+                  "0",
+                )}
+                :{String(recording.elapsed_seconds % 60).padStart(2, "0")}
+              </span>
               <span className="level-bars">
-                <span className="level-bar mic" style={{ height: `${Math.min(100, (recording.mic_level ?? 0) * 300)}%` }} />
-                <span className="level-bar system" style={{ height: `${Math.min(100, (recording.system_level ?? 0) * 300)}%` }} />
+                <span
+                  className="level-bar mic"
+                  style={{
+                    height: `${Math.min(100, (recording.mic_level ?? 0) * 300)}%`,
+                  }}
+                />
+                <span
+                  className="level-bar system"
+                  style={{
+                    height: `${Math.min(100, (recording.system_level ?? 0) * 300)}%`,
+                  }}
+                />
               </span>
             </button>
           ) : effectiveProcessingProgress ? (
-            <span className="recording-progress-text" style={{ marginLeft: "auto" }}>{effectiveProcessingProgress.replace(/\.+$/, "")}<span className="related-loading"> ...</span></span>
+            <span
+              className="recording-progress-text"
+              style={{ marginLeft: "auto" }}
+            >
+              {effectiveProcessingProgress.replace(/\.+$/, "")}
+              <span className="related-loading"> ...</span>
+            </span>
           ) : tags.includes("meeting") && loadedNoteId ? null : (
-            <button className="record-btn" onClick={onStartRecording} disabled={!!recordingLocked} title="Record" style={{ marginLeft: "auto" }}>
+            <button
+              className="record-btn"
+              onClick={onStartRecording}
+              disabled={!!recordingLocked}
+              title="Record"
+              style={{ marginLeft: "auto" }}
+            >
               ●
             </button>
           )}
         </div>
-        <div style={{ display: editing ? undefined : 'none' }}>
-          <Editor ref={editorRef} content={content} onChange={handleChange} onSave={handleSave} themeId={themeId} vimEnabled={vimEnabled} onVimToggle={onVimToggle} onNoteNavigate={onNoteNavigate} recentNotes={recentNotes} />
+        <div style={{ display: editing ? undefined : "none" }}>
+          <Editor
+            ref={editorRef}
+            content={content}
+            onChange={handleChange}
+            onSave={handleSave}
+            themeId={themeId}
+            vimEnabled={vimEnabled}
+            onVimToggle={onVimToggle}
+            onNoteNavigate={onNoteNavigate}
+            recentNotes={recentNotes}
+          />
         </div>
-        {!editing && (() => {
-          const hasSummary = content.includes("## Summary") && content.includes("## Transcript");
-          if (hasSummary) {
-            const summaryMatch = content.match(/## Summary\n+([\s\S]*?)(?=\n## Transcript)/);
-            const transcriptMatch = content.match(/## Transcript\n+([\s\S]*?)$/);
-            const summaryContent = summaryMatch ? summaryMatch[1].trim() : "";
-            const transcriptContent = transcriptMatch ? transcriptMatch[1].trim() : "";
-            // Everything before ## Summary is the user's notes
-            const notesContent = content.split(/\n## Summary/)[0].trim();
-            const hasNotes = notesContent.replace(/^#\s+.*$/m, "").trim().length > 0;
-            const viewContent = meetingView === "notes"
-              ? notesContent
-              : meetingView === "summary"
-                ? summaryContent
-                : transcriptContent;
+        {!editing &&
+          (() => {
+            const hasSummary =
+              content.includes("## Summary") &&
+              content.includes("## Transcript");
+            if (hasSummary) {
+              const summaryMatch = content.match(
+                /## Summary\n+([\s\S]*?)(?=\n## Transcript)/,
+              );
+              const transcriptMatch = content.match(
+                /## Transcript\n+([\s\S]*?)$/,
+              );
+              const summaryContent = summaryMatch ? summaryMatch[1].trim() : "";
+              const transcriptContent = transcriptMatch
+                ? transcriptMatch[1].trim()
+                : "";
+              // Everything before ## Summary is the user's notes
+              const notesContent = content.split(/\n## Summary/)[0].trim();
+              const hasNotes =
+                notesContent.replace(/^#\s+.*$/m, "").trim().length > 0;
+              const viewContent =
+                meetingView === "notes"
+                  ? notesContent
+                  : meetingView === "summary"
+                    ? summaryContent
+                    : transcriptContent;
+              return (
+                <>
+                  <div className="meeting-view-toggle">
+                    {hasNotes && (
+                      <button
+                        className={meetingView === "notes" ? "active" : ""}
+                        onClick={() => setMeetingView("notes")}
+                      >
+                        Notes
+                      </button>
+                    )}
+                    <button
+                      className={meetingView === "summary" ? "active" : ""}
+                      onClick={() => setMeetingView("summary")}
+                    >
+                      Summary
+                    </button>
+                    <button
+                      className={meetingView === "transcript" ? "active" : ""}
+                      onClick={() => setMeetingView("transcript")}
+                    >
+                      Transcript
+                    </button>
+                  </div>
+                  <div className="meeting-content-wrapper">
+                    {meetingView === "summary" && (
+                      <button
+                        className="meeting-regen-btn"
+                        onClick={() => void handleResummarizeNote()}
+                        title="Regenerate summary from transcript"
+                      >
+                        {resummarizingNote ? (
+                          <span className="related-loading">...</span>
+                        ) : (
+                          "↻"
+                        )}
+                      </button>
+                    )}
+                    {meetingView === "transcript" && (
+                      <button
+                        className="meeting-regen-btn"
+                        onClick={() => void handleRetranscribeNote()}
+                        title="Retranscribe from audio file"
+                      >
+                        {retranscribingNote ? (
+                          <span className="related-loading">...</span>
+                        ) : (
+                          "↻"
+                        )}
+                      </button>
+                    )}
+                    <MarkdownView
+                      content={viewContent}
+                      onEdit={handleEdit}
+                      onNoteNavigate={onNoteNavigate}
+                    />
+                  </div>
+                </>
+              );
+            }
             return (
-              <>
-                <div className="meeting-view-toggle">
-                  {hasNotes && (
-                    <button
-                      className={meetingView === "notes" ? "active" : ""}
-                      onClick={() => setMeetingView("notes")}
-                    >Notes</button>
-                  )}
-                  <button
-                    className={meetingView === "summary" ? "active" : ""}
-                    onClick={() => setMeetingView("summary")}
-                  >
-                    Summary
-                  </button>
-                  <button
-                    className={meetingView === "transcript" ? "active" : ""}
-                    onClick={() => setMeetingView("transcript")}
-                  >
-                    Transcript
-                  </button>
-                </div>
-                <div className="meeting-content-wrapper">
-                  {meetingView === "summary" && (
-                    <button
-                      className="meeting-regen-btn"
-                      onClick={() => void handleResummarizeNote()}
-                      title="Regenerate summary from transcript"
-                    >
-                      {resummarizingNote ? <span className="related-loading">...</span> : "↻"}
-                    </button>
-                  )}
-                  {meetingView === "transcript" && (
-                    <button
-                      className="meeting-regen-btn"
-                      onClick={() => void handleRetranscribeNote()}
-                      title="Retranscribe from audio file"
-                    >
-                      {retranscribingNote ? <span className="related-loading">...</span> : "↻"}
-                    </button>
-                  )}
-                  <MarkdownView content={viewContent} onEdit={handleEdit} onNoteNavigate={onNoteNavigate} />
-                </div>
-              </>
+              <MarkdownView
+                content={content}
+                onEdit={handleEdit}
+                onNoteNavigate={onNoteNavigate}
+              />
             );
-          }
-          return <MarkdownView content={content} onEdit={handleEdit} onNoteNavigate={onNoteNavigate} />;
-        })()}
+          })()}
         <div className="save-hint">
-          {/Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
-            ? <><kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>+</kbd> shortcuts</>
-            : <><kbd>Ctrl</kbd> <kbd>/</kbd> shortcuts</>
-          }
+          {/Mac|iPhone|iPad|iPod/i.test(
+            navigator.platform || navigator.userAgent,
+          ) ? (
+            <>
+              <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>+</kbd> shortcuts
+            </>
+          ) : (
+            <>
+              <kbd>Ctrl</kbd> <kbd>/</kbd> shortcuts
+            </>
+          )}
         </div>
         <NotesList
           notes={displayedNotes}
