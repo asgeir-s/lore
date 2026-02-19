@@ -436,6 +436,63 @@ fn append_meeting_data(
 }
 
 #[tauri::command]
+async fn retranscribe_note(state: State<'_, AppState>, id: String) -> Result<NoteMetadata, String> {
+    let (notes_dir, audio_path, whisper_model) = {
+        let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
+        let ms = state.model_settings.lock().map_err(|e| e.to_string())?;
+        let audio_path = std::path::Path::new(&*dir)
+            .join("meetings")
+            .join(".audio")
+            .join(format!("{id}.wav"));
+        (dir.clone(), audio_path, ms.whisper_model.clone())
+    };
+
+    if !audio_path.exists() {
+        return Err(format!("Audio file not found: {}", audio_path.display()));
+    }
+
+    let transcript = recording::transcribe(&audio_path, whisper_model.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let meta = {
+        let mut index = state.index.lock().map_err(|e| e.to_string())?;
+        notes::replace_meeting_transcript(&notes_dir, &id, &transcript, &mut index)
+            .map_err(|e| e.to_string())?
+    };
+
+    let git = state.git.lock().map_err(|e| e.to_string())?;
+    git.notify_change(&meta.path, &meta.title, false);
+    Ok(meta)
+}
+
+#[tauri::command]
+async fn resummarize_note(state: State<'_, AppState>, id: String) -> Result<NoteMetadata, String> {
+    let (notes_dir, transcript, summary_model) = {
+        let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
+        let ms = state.model_settings.lock().map_err(|e| e.to_string())?;
+        let index = state.index.lock().map_err(|e| e.to_string())?;
+        let transcript = notes::get_note_transcript(&dir, &id, &index)
+            .map_err(|e| e.to_string())?;
+        (dir.clone(), transcript, ms.summary_model.clone())
+    };
+
+    let summary = recording::summarize(&transcript, summary_model.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let meta = {
+        let mut index = state.index.lock().map_err(|e| e.to_string())?;
+        notes::replace_meeting_summary(&notes_dir, &id, &summary, &mut index)
+            .map_err(|e| e.to_string())?
+    };
+
+    let git = state.git.lock().map_err(|e| e.to_string())?;
+    git.notify_change(&meta.path, &meta.title, false);
+    Ok(meta)
+}
+
+#[tauri::command]
 fn stop_recording(state: State<AppState>) -> Result<(), String> {
     let rec = state.recording.lock().map_err(|e| e.to_string())?;
     rec.stop();
@@ -705,6 +762,8 @@ pub fn run() {
             list_input_devices,
             start_recording,
             append_meeting_data,
+            retranscribe_note,
+            resummarize_note,
             stop_recording,
             get_recording_state,
             check_pending_jobs,

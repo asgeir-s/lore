@@ -328,6 +328,20 @@ export async function appendMeetingData(
   throw new Error("Append meeting data is only available in the desktop app");
 }
 
+export async function retranscribeNote(id: string): Promise<NoteMetadata> {
+  if (isTauri()) {
+    return invoke<NoteMetadata>("retranscribe_note", { id });
+  }
+  throw new Error("Retranscribe is only available in the desktop app");
+}
+
+export async function resummarizeNote(id: string): Promise<NoteMetadata> {
+  if (isTauri()) {
+    return invoke<NoteMetadata>("resummarize_note", { id });
+  }
+  throw new Error("Resummarize is only available in the desktop app");
+}
+
 export async function getRecordingState(): Promise<RecordingState> {
   if (isTauri()) {
     return invoke<RecordingState>("get_recording_state");

@@ -539,6 +539,8 @@ body {
   opacity: 0.45;
   flex-shrink: 0;
   vertical-align: middle;
+  position: relative;
+  top: -2px;
 }
 
 .note-item-time {
@@ -1470,6 +1472,9 @@ body {
 }
 
 .meeting-view-toggle button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 6px 16px;
   font-size: 13px;
   font-family: var(--font);
@@ -1492,6 +1497,47 @@ body {
 .meeting-view-toggle button.active {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.meeting-content-wrapper {
+  position: relative;
+}
+
+.meeting-regen-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.meeting-content-wrapper:hover .meeting-regen-btn {
+  opacity: 1;
+}
+
+.meeting-regen-btn:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.meeting-regen-btn:active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
 }
 
 /* Settings panel overlay */

@@ -396,6 +396,112 @@ pub fn append_meeting_data(
     Ok(updated)
 }
 
+/// Extract the transcript text from a meeting note.
+pub fn get_note_transcript(notes_dir: &str, id: &str, index: &NoteIndex) -> io::Result<String> {
+    let meta = index
+        .notes
+        .get(id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?;
+    let file_path = Path::new(notes_dir).join(&meta.path);
+    let raw = fs::read_to_string(&file_path)?;
+    let (_, body) = parse_raw_yaml(&raw);
+    let transcript = extract_section(&body, "## Transcript")
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No transcript section found"))?;
+    Ok(transcript)
+}
+
+/// Replace only the `## Transcript` section of a meeting note.
+pub fn replace_meeting_transcript(
+    notes_dir: &str,
+    id: &str,
+    transcript: &str,
+    index: &mut NoteIndex,
+) -> io::Result<NoteMetadata> {
+    let meta = index
+        .notes
+        .get(id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?
+        .clone();
+    let file_path = Path::new(notes_dir).join(&meta.path);
+    let raw = fs::read_to_string(&file_path)?;
+    let (raw_yaml, body) = parse_raw_yaml(&raw);
+
+    let pos = body
+        .find("## Transcript")
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No transcript section found"))?;
+    let new_body = format!("{}## Transcript\n\n{}\n", &body[..pos], transcript);
+
+    write_meeting_section(notes_dir, &meta, raw_yaml, new_body, index, &file_path)
+}
+
+/// Replace only the `## Summary` section of a meeting note.
+pub fn replace_meeting_summary(
+    notes_dir: &str,
+    id: &str,
+    summary: &str,
+    index: &mut NoteIndex,
+) -> io::Result<NoteMetadata> {
+    let meta = index
+        .notes
+        .get(id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?
+        .clone();
+    let file_path = Path::new(notes_dir).join(&meta.path);
+    let raw = fs::read_to_string(&file_path)?;
+    let (raw_yaml, body) = parse_raw_yaml(&raw);
+
+    let sum_pos = body
+        .find("## Summary")
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No summary section found"))?;
+    let trans_pos = body
+        .find("## Transcript")
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No transcript section found"))?;
+    let new_body = format!(
+        "{}## Summary\n\n{}\n\n{}",
+        &body[..sum_pos],
+        summary,
+        &body[trans_pos..]
+    );
+
+    write_meeting_section(notes_dir, &meta, raw_yaml, new_body, index, &file_path)
+}
+
+fn extract_section(body: &str, header: &str) -> Option<String> {
+    let pos = body.find(header)?;
+    let after = &body[pos + header.len()..];
+    Some(after.trim_start_matches('\n').trim_end().to_string())
+}
+
+fn write_meeting_section(
+    notes_dir: &str,
+    meta: &NoteMetadata,
+    raw_yaml: Option<serde_yaml::Mapping>,
+    body: String,
+    index: &mut NoteIndex,
+    file_path: &Path,
+) -> io::Result<NoteMetadata> {
+    let modified = Local::now().to_rfc3339();
+    let frontmatter = build_frontmatter(
+        &meta.id,
+        &meta.created,
+        &modified,
+        &meta.tags,
+        meta.starred,
+        Some(&meta.title),
+        raw_yaml.as_ref(),
+    );
+    let full_content = format!("{frontmatter}{body}");
+    fs::write(file_path, full_content)?;
+
+    let updated = NoteMetadata {
+        modified,
+        ..meta.clone()
+    };
+    index.notes.insert(meta.id.clone(), updated.clone());
+    save_index(notes_dir, index)?;
+    Ok(updated)
+}
+
 /// Toggle the starred state of a note
 pub fn toggle_star(
     notes_dir: &str,
@@ -451,15 +557,22 @@ pub fn set_auto_tags(
         return Ok(None);
     }
 
+    let is_meeting_note = meta.tags.iter().any(|t| t == "meeting")
+        || meta.path.starts_with("meetings/");
+
     // Normal flow:
     // - For regular notes, only auto-tag when empty.
     // - For meeting notes, merge generated tags into existing tags.
     // - For forced regenerate, replace tags.
     let next_tags = if force {
-        tags.to_vec()
+        let mut next = tags.to_vec();
+        if is_meeting_note && !next.iter().any(|t| t == "meeting") {
+            next.push("meeting".to_string());
+        }
+        next
     } else if meta.tags.is_empty() {
         tags.to_vec()
-    } else if meta.tags.iter().any(|t| t == "meeting") {
+    } else if is_meeting_note {
         let mut merged = meta.tags.clone();
         for tag in tags {
             if !merged.iter().any(|t| t == tag) {
@@ -476,7 +589,7 @@ pub fn set_auto_tags(
 
     let mut next_title = meta.title.clone();
     if !force
-        && meta.tags.iter().any(|t| t == "meeting")
+        && is_meeting_note
         && is_auto_meeting_title(&meta.title)
     {
         // For auto meeting titles, prefer the freshly generated backend tags

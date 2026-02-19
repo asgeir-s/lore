@@ -19,6 +19,8 @@ import {
   toggleStar,
   getRelatedNotes,
   regenerateTags,
+  retranscribeNote,
+  resummarizeNote,
   appendMeetingData as appendMeetingDataApi,
 } from "./api";
 import type { NoteMetadata, SortBy, RecordingState } from "./api";
@@ -102,6 +104,8 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     const [showTagInput, setShowTagInput] = useState(false);
     const [precomputedRelated, setPrecomputedRelated] = useState<NoteMetadata[]>([]);
     const [regeneratingTags, setRegeneratingTags] = useState(false);
+    const [retranscribingNote, setRetranscribingNote] = useState(false);
+    const [resummarizingNote, setResummarizingNote] = useState(false);
     const [relatedLoading, setRelatedLoading] = useState(false);
     const [meetingView, setMeetingView] = useState<"notes" | "summary" | "transcript">("notes");
     const [userModified, setUserModified] = useState(independent ?? false);
@@ -517,6 +521,38 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       await regenerateTagsForNote(loadedNoteId);
     }, [loadedNoteId, regeneratingTags, regenerateTagsForNote]);
 
+    const handleRetranscribeNote = useCallback(async () => {
+      if (!loadedNoteId || retranscribingNote) return;
+      setRetranscribingNote(true);
+      try {
+        await retranscribeNote(loadedNoteId);
+        const noteContent = await getNote(loadedNoteId);
+        setContent(noteContent.content);
+        setMeetingView("transcript");
+        await onSaved();
+      } catch (e) {
+        console.error("Failed to retranscribe:", e);
+      } finally {
+        setRetranscribingNote(false);
+      }
+    }, [loadedNoteId, retranscribingNote, onSaved]);
+
+    const handleResummarizeNote = useCallback(async () => {
+      if (!loadedNoteId || resummarizingNote) return;
+      setResummarizingNote(true);
+      try {
+        await resummarizeNote(loadedNoteId);
+        const noteContent = await getNote(loadedNoteId);
+        setContent(noteContent.content);
+        setMeetingView("summary");
+        await onSaved();
+      } catch (e) {
+        console.error("Failed to resummarize:", e);
+      } finally {
+        setResummarizingNote(false);
+      }
+    }, [loadedNoteId, resummarizingNote, onSaved]);
+
     // Auto-generate tags when opening a saved note that has no tags yet.
     useEffect(() => {
       if (!loadedNoteId || regeneratingTags || tags.length > 0) return;
@@ -656,13 +692,37 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
                   <button
                     className={meetingView === "summary" ? "active" : ""}
                     onClick={() => setMeetingView("summary")}
-                  >Summary</button>
+                  >
+                    Summary
+                  </button>
                   <button
                     className={meetingView === "transcript" ? "active" : ""}
                     onClick={() => setMeetingView("transcript")}
-                  >Transcript</button>
+                  >
+                    Transcript
+                  </button>
                 </div>
-                <MarkdownView content={viewContent} onEdit={handleEdit} onNoteNavigate={onNoteNavigate} />
+                <div className="meeting-content-wrapper">
+                  {meetingView === "summary" && (
+                    <button
+                      className="meeting-regen-btn"
+                      onClick={() => void handleResummarizeNote()}
+                      title="Regenerate summary from transcript"
+                    >
+                      {resummarizingNote ? <span className="related-loading">...</span> : "↻"}
+                    </button>
+                  )}
+                  {meetingView === "transcript" && (
+                    <button
+                      className="meeting-regen-btn"
+                      onClick={() => void handleRetranscribeNote()}
+                      title="Retranscribe from audio file"
+                    >
+                      {retranscribingNote ? <span className="related-loading">...</span> : "↻"}
+                    </button>
+                  )}
+                  <MarkdownView content={viewContent} onEdit={handleEdit} onNoteNavigate={onNoteNavigate} />
+                </div>
               </>
             );
           }

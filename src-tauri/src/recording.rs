@@ -1034,7 +1034,7 @@ async fn find_whisper_model(override_name: Option<&str>) -> Option<PathBuf> {
     None
 }
 
-async fn transcribe(wav_path: &Path, whisper_model_override: Option<&str>) -> Result<String, String> {
+pub async fn transcribe(wav_path: &Path, whisper_model_override: Option<&str>) -> Result<String, String> {
     let model = find_whisper_model(whisper_model_override)
         .await
         .ok_or_else(|| "No whisper model found. Download a ggml model.".to_string())?;
@@ -1182,7 +1182,7 @@ async fn find_ollama_model(override_model: Option<&str>) -> Option<String> {
     None
 }
 
-async fn summarize(transcript: &str, summary_model_override: Option<&str>) -> Result<String, String> {
+pub async fn summarize(transcript: &str, summary_model_override: Option<&str>) -> Result<String, String> {
     let model = find_ollama_model(summary_model_override)
         .await
         .ok_or_else(|| "No ollama model available".to_string())?;
