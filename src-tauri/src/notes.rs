@@ -1,4 +1,4 @@
-use chrono::{Local, DateTime, TimeZone};
+use chrono::{DateTime, Local, TimeZone};
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -148,10 +148,7 @@ fn format_meeting_title_from_tags(tags: &[String]) -> Option<String> {
 }
 
 fn is_auto_meeting_title(title: &str) -> bool {
-    if title == "Untitled"
-        || title == "Meeting about"
-        || title.starts_with("Meeting about ")
-    {
+    if title == "Untitled" || title == "Meeting about" || title.starts_with("Meeting about ") {
         return true;
     }
     let Some(rest) = title.strip_prefix("Meeting ") else {
@@ -162,8 +159,7 @@ fn is_auto_meeting_title(title: &str) -> bool {
     let mut parts = rest.split_whitespace();
     if let (Some(month), Some(day), None) = (parts.next(), parts.next(), parts.next()) {
         const MONTHS: &[&str] = &[
-            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
         ];
         if MONTHS.contains(&month) && day.chars().all(|c| c.is_ascii_digit()) {
             return true;
@@ -200,15 +196,9 @@ fn build_frontmatter(
     extra: Option<&Mapping>,
 ) -> String {
     let mut map = Mapping::new();
-    map.insert(
-        Value::String("id".into()),
-        Value::String(id.into()),
-    );
+    map.insert(Value::String("id".into()), Value::String(id.into()));
     if let Some(t) = title {
-        map.insert(
-            Value::String("title".into()),
-            Value::String(t.into()),
-        );
+        map.insert(Value::String("title".into()), Value::String(t.into()));
     }
     map.insert(
         Value::String("created".into()),
@@ -300,7 +290,15 @@ pub fn save_note(
     }
 
     let modified = now.to_rfc3339();
-    let frontmatter = build_frontmatter(&note_id, &created, &modified, tags, starred, Some(&title), extra.as_ref());
+    let frontmatter = build_frontmatter(
+        &note_id,
+        &created,
+        &modified,
+        tags,
+        starred,
+        Some(&title),
+        extra.as_ref(),
+    );
     let full_content = format!("{}{}", frontmatter, content);
 
     fs::write(&file_path, &full_content)?;
@@ -359,9 +357,7 @@ pub fn append_meeting_data(
     } else {
         let trimmed = body.trim_end();
         let separator = if trimmed.is_empty() { "" } else { "\n\n" };
-        format!(
-            "{trimmed}{separator}## Summary\n\n{summary}\n\n## Transcript\n\n{transcript}\n"
-        )
+        format!("{trimmed}{separator}## Summary\n\n{summary}\n\n## Transcript\n\n{transcript}\n")
     };
 
     // Keep user-defined titles. Replace only known auto-generated placeholders.
@@ -503,11 +499,7 @@ fn write_meeting_section(
 }
 
 /// Toggle the starred state of a note
-pub fn toggle_star(
-    notes_dir: &str,
-    id: &str,
-    index: &mut NoteIndex,
-) -> io::Result<NoteMetadata> {
+pub fn toggle_star(notes_dir: &str, id: &str, index: &mut NoteIndex) -> io::Result<NoteMetadata> {
     let meta = index
         .notes
         .get(id)
@@ -522,7 +514,13 @@ pub fn toggle_star(
     let (raw_yaml, body) = parse_raw_yaml(&raw);
 
     let frontmatter = build_frontmatter(
-        &meta.id, &meta.created, &meta.modified, &meta.tags, new_starred, Some(&meta.title), raw_yaml.as_ref(),
+        &meta.id,
+        &meta.created,
+        &meta.modified,
+        &meta.tags,
+        new_starred,
+        Some(&meta.title),
+        raw_yaml.as_ref(),
     );
     let full_content = format!("{}{}", frontmatter, body);
     fs::write(&file_path, &full_content)?;
@@ -557,8 +555,8 @@ pub fn set_auto_tags(
         return Ok(None);
     }
 
-    let is_meeting_note = meta.tags.iter().any(|t| t == "meeting")
-        || meta.path.starts_with("meetings/");
+    let is_meeting_note =
+        meta.tags.iter().any(|t| t == "meeting") || meta.path.starts_with("meetings/");
 
     // Normal flow:
     // - For regular notes, only auto-tag when empty.
@@ -588,10 +586,7 @@ pub fn set_auto_tags(
     };
 
     let mut next_title = meta.title.clone();
-    if !force
-        && is_meeting_note
-        && is_auto_meeting_title(&meta.title)
-    {
+    if !force && is_meeting_note && is_auto_meeting_title(&meta.title) {
         // For auto meeting titles, prefer the freshly generated backend tags
         // so "Meeting about ..." reflects new inferred topics.
         next_title = format_meeting_title_from_tags(tags)
@@ -629,11 +624,7 @@ pub fn set_auto_tags(
 }
 
 /// Delete a note by ID
-pub fn delete_note(
-    notes_dir: &str,
-    id: &str,
-    index: &mut NoteIndex,
-) -> io::Result<()> {
+pub fn delete_note(notes_dir: &str, id: &str, index: &mut NoteIndex) -> io::Result<()> {
     let meta = index
         .notes
         .get(id)
@@ -678,11 +669,9 @@ pub fn list_recent_notes(index: &NoteIndex, limit: usize, sort_by: &str) -> Vec<
     let mut notes: Vec<&NoteMetadata> = index.notes.values().collect();
     notes.sort_by(|a, b| {
         // Starred notes first
-        b.starred.cmp(&a.starred).then_with(|| {
-            match sort_by {
-                "modified" => b.modified.cmp(&a.modified),
-                _ => b.created.cmp(&a.created),
-            }
+        b.starred.cmp(&a.starred).then_with(|| match sort_by {
+            "modified" => b.modified.cmp(&a.modified),
+            _ => b.created.cmp(&a.created),
         })
     });
     notes.into_iter().take(limit).cloned().collect()
@@ -708,9 +697,7 @@ fn fuzzy_score(query: &str, target: &str) -> Option<i32> {
             score += 1; // base point per match
 
             // Word-boundary bonus: start of string, or after space/_/-
-            if ti == 0
-                || matches!(target_lower.get(ti.wrapping_sub(1)), Some(' ' | '_' | '-'))
-            {
+            if ti == 0 || matches!(target_lower.get(ti.wrapping_sub(1)), Some(' ' | '_' | '-')) {
                 score += 2;
             }
 
@@ -779,11 +766,7 @@ pub fn search_notes(
 }
 
 /// Fallback content search using simple substring matching
-fn content_search_fallback(
-    notes_dir: &str,
-    query: &str,
-    index: &NoteIndex,
-) -> Vec<NoteMetadata> {
+fn content_search_fallback(notes_dir: &str, query: &str, index: &NoteIndex) -> Vec<NoteMetadata> {
     let query_lower = query.to_lowercase();
     let terms: Vec<&str> = query_lower.split_whitespace().collect();
 
@@ -820,10 +803,7 @@ fn search_with_qmd(
         .output()?;
 
     if !output.status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "qmd search failed",
-        ));
+        return Err(io::Error::new(io::ErrorKind::Other, "qmd search failed"));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -909,8 +889,8 @@ pub fn save_index_pub(notes_dir: &str, index: &NoteIndex) -> io::Result<()> {
 /// Save the index to .dump-index.json
 fn save_index(notes_dir: &str, index: &NoteIndex) -> io::Result<()> {
     let index_path = Path::new(notes_dir).join(".dump-index.json");
-    let json = serde_json::to_string_pretty(index)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let json =
+        serde_json::to_string_pretty(index).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
     fs::write(index_path, json)
 }
 
@@ -1095,7 +1075,15 @@ pub fn import_markdown_file(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let frontmatter = build_frontmatter(&note_id, &created, &modified, &tags, starred, Some(&title), Some(&extra));
+    let frontmatter = build_frontmatter(
+        &note_id,
+        &created,
+        &modified,
+        &tags,
+        starred,
+        Some(&title),
+        Some(&extra),
+    );
     let full_content = format!("{}{}", frontmatter, body);
 
     let timestamp = now.format("%Y%m%d%H%M%S").to_string();
@@ -1208,7 +1196,15 @@ mod tests {
         let dir = setup_test_dir();
         let mut index = NoteIndex::default();
 
-        let meta = save_note(&dir, None, "# Test Note\n\nHello world", &["test".to_string()], None, &mut index).unwrap();
+        let meta = save_note(
+            &dir,
+            None,
+            "# Test Note\n\nHello world",
+            &["test".to_string()],
+            None,
+            &mut index,
+        )
+        .unwrap();
         assert_eq!(meta.title, "Test Note");
         assert!(!meta.id.is_empty());
 
@@ -1240,7 +1236,15 @@ mod tests {
         let dir = setup_test_dir();
         let mut index = NoteIndex::default();
 
-        save_note(&dir, None, "# Indexed Note", &["tag1".to_string()], None, &mut index).unwrap();
+        save_note(
+            &dir,
+            None,
+            "# Indexed Note",
+            &["tag1".to_string()],
+            None,
+            &mut index,
+        )
+        .unwrap();
 
         // Rebuild from scratch
         let rebuilt = rebuild_index(&dir).unwrap();
@@ -1256,8 +1260,24 @@ mod tests {
         let dir = setup_test_dir();
         let mut index = NoteIndex::default();
 
-        save_note(&dir, None, "# A", &["alpha".to_string(), "beta".to_string()], None, &mut index).unwrap();
-        save_note(&dir, None, "# B", &["beta".to_string(), "gamma".to_string()], None, &mut index).unwrap();
+        save_note(
+            &dir,
+            None,
+            "# A",
+            &["alpha".to_string(), "beta".to_string()],
+            None,
+            &mut index,
+        )
+        .unwrap();
+        save_note(
+            &dir,
+            None,
+            "# B",
+            &["beta".to_string(), "gamma".to_string()],
+            None,
+            &mut index,
+        )
+        .unwrap();
 
         let tags = get_all_tags(&index);
         assert_eq!(tags, vec!["alpha", "beta", "gamma"]);
@@ -1270,8 +1290,24 @@ mod tests {
         let dir = setup_test_dir();
         let mut index = NoteIndex::default();
 
-        save_note(&dir, None, "# Apple pie recipe\n\nDelicious apple pie", &[], None, &mut index).unwrap();
-        save_note(&dir, None, "# Banana bread\n\nYummy banana bread", &[], None, &mut index).unwrap();
+        save_note(
+            &dir,
+            None,
+            "# Apple pie recipe\n\nDelicious apple pie",
+            &[],
+            None,
+            &mut index,
+        )
+        .unwrap();
+        save_note(
+            &dir,
+            None,
+            "# Banana bread\n\nYummy banana bread",
+            &[],
+            None,
+            &mut index,
+        )
+        .unwrap();
 
         let results = search_notes(&dir, "apple", &index).unwrap();
         assert_eq!(results.len(), 1);
@@ -1308,10 +1344,7 @@ mod tests {
 
     #[test]
     fn test_fuzzy_score_case_insensitive() {
-        assert_eq!(
-            fuzzy_score("MTG", "Meeting"),
-            fuzzy_score("mtg", "Meeting")
-        );
+        assert_eq!(fuzzy_score("MTG", "Meeting"), fuzzy_score("mtg", "Meeting"));
     }
 
     #[test]
@@ -1319,9 +1352,33 @@ mod tests {
         let dir = setup_test_dir();
         let mut index = NoteIndex::default();
 
-        save_note(&dir, None, "# Meeting Notes\n\nSome content", &[], None, &mut index).unwrap();
-        save_note(&dir, None, "# Quick Start Guide\n\nAnother doc", &[], None, &mut index).unwrap();
-        save_note(&dir, None, "# Random Thoughts\n\nUnrelated", &[], None, &mut index).unwrap();
+        save_note(
+            &dir,
+            None,
+            "# Meeting Notes\n\nSome content",
+            &[],
+            None,
+            &mut index,
+        )
+        .unwrap();
+        save_note(
+            &dir,
+            None,
+            "# Quick Start Guide\n\nAnother doc",
+            &[],
+            None,
+            &mut index,
+        )
+        .unwrap();
+        save_note(
+            &dir,
+            None,
+            "# Random Thoughts\n\nUnrelated",
+            &[],
+            None,
+            &mut index,
+        )
+        .unwrap();
 
         // "mtg" fuzzy matches "Meeting" (m-t from Mee_t_ing, g from Meetin_g_... wait, no g in Meeting)
         // Actually: "mtg" → M(eeting) → no t or g... Let me think.
@@ -1342,11 +1399,25 @@ mod tests {
         let mut index = NoteIndex::default();
 
         // Title AND content both match "apple"
-        save_note(&dir, None, "# Apple pie recipe\n\nDelicious apple pie", &[], None, &mut index).unwrap();
+        save_note(
+            &dir,
+            None,
+            "# Apple pie recipe\n\nDelicious apple pie",
+            &[],
+            None,
+            &mut index,
+        )
+        .unwrap();
 
         let results = search_notes(&dir, "apple", &index).unwrap();
         // Should appear only once despite matching both fuzzy title and content
-        assert_eq!(results.iter().filter(|r| r.title == "Apple pie recipe").count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|r| r.title == "Apple pie recipe")
+                .count(),
+            1
+        );
 
         fs::remove_dir_all(&dir).ok();
     }

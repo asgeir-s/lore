@@ -42,7 +42,11 @@ pub struct QmdHandle {
 }
 
 impl QmdHandle {
-    pub fn new(notes_dir: &str, app_handle: tauri::AppHandle, keyword_model: Option<String>) -> Self {
+    pub fn new(
+        notes_dir: &str,
+        app_handle: tauri::AppHandle,
+        keyword_model: Option<String>,
+    ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let dir = PathBuf::from(notes_dir);
         let cache_path = dir.join(".dump-related.json");
@@ -67,9 +71,7 @@ impl QmdHandle {
     }
 
     pub fn notify_delete(&self, id: &str) {
-        let _ = self.tx.send(Msg::NoteDeleted {
-            id: id.to_string(),
-        });
+        let _ = self.tx.send(Msg::NoteDeleted { id: id.to_string() });
     }
 
     pub fn shutdown(&self) {
@@ -78,7 +80,11 @@ impl QmdHandle {
 
     pub async fn get_related(&self, id: &str) -> Vec<RelatedEntry> {
         let cache = self.cache.read().await;
-        cache.relations.get(id).map(|e| e.entries.clone()).unwrap_or_default()
+        cache
+            .relations
+            .get(id)
+            .map(|e| e.entries.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -205,7 +211,20 @@ async fn run_worker(
 
     // Initialize qmd collection.
     let dir_str = dir.to_string_lossy().to_string();
-    if let Err(e) = qmd(&dir, &["collection", "add", &dir_str, "--name", "notes", "--mask", "*.md"]).await {
+    if let Err(e) = qmd(
+        &dir,
+        &[
+            "collection",
+            "add",
+            &dir_str,
+            "--name",
+            "notes",
+            "--mask",
+            "*.md",
+        ],
+    )
+    .await
+    {
         eprintln!("qmd: collection add failed (may already exist): {e}");
     }
     if let Err(e) = qmd(&dir, &["update"]).await {
@@ -270,13 +289,31 @@ async fn run_worker(
             }
             Some(Msg::Shutdown) => {
                 if !pending.is_empty() {
-                    process_pending(&dir, &mut pending, &cache, &cache_path, &app_handle, has_ollama, &ollama_model).await;
+                    process_pending(
+                        &dir,
+                        &mut pending,
+                        &cache,
+                        &cache_path,
+                        &app_handle,
+                        has_ollama,
+                        &ollama_model,
+                    )
+                    .await;
                 }
                 break;
             }
             None => {
                 if !pending.is_empty() {
-                    process_pending(&dir, &mut pending, &cache, &cache_path, &app_handle, has_ollama, &ollama_model).await;
+                    process_pending(
+                        &dir,
+                        &mut pending,
+                        &cache,
+                        &cache_path,
+                        &app_handle,
+                        has_ollama,
+                        &ollama_model,
+                    )
+                    .await;
                 }
                 break;
             }
@@ -324,7 +361,15 @@ async fn process_pending(
 
     for (note_id, title) in &items {
         let note_tags = id_to_tags.get(note_id).cloned().unwrap_or_default();
-        let (query_text, keywords) = build_query(dir, title, id_to_path.get(note_id), &note_tags, has_ollama, ollama_model).await;
+        let (query_text, keywords) = build_query(
+            dir,
+            title,
+            id_to_path.get(note_id),
+            &note_tags,
+            has_ollama,
+            ollama_model,
+        )
+        .await;
 
         // Auto-tag notes that have no tags
         if let Some(ref kw) = keywords {
@@ -334,13 +379,19 @@ async fn process_pending(
                     let mut index = state.index.lock().ok();
                     match (notes_dir, index.as_mut()) {
                         (Some(dir), Some(idx)) => {
-                            crate::notes::set_auto_tags(&dir, note_id, kw, idx, false).ok().flatten()
+                            crate::notes::set_auto_tags(&dir, note_id, kw, idx, false)
+                                .ok()
+                                .flatten()
                         }
                         _ => None,
                     }
                 };
                 if let Some(meta) = applied {
-                    eprintln!("qmd: auto-tagged '{}' with {:?}", &note_id[..8.min(note_id.len())], kw);
+                    eprintln!(
+                        "qmd: auto-tagged '{}' with {:?}",
+                        &note_id[..8.min(note_id.len())],
+                        kw
+                    );
                     if let Ok(git) = state.git.lock() {
                         git.notify_change(&meta.path, &meta.title, false);
                     }
@@ -352,21 +403,47 @@ async fn process_pending(
         if query_text.trim().is_empty() {
             continue;
         }
-        eprintln!("qmd: query for '{}': {}", &note_id[..8.min(note_id.len())], &query_text[..100.min(query_text.len())]);
+        eprintln!(
+            "qmd: query for '{}': {}",
+            &note_id[..8.min(note_id.len())],
+            &query_text[..100.min(query_text.len())]
+        );
 
-        match qmd(dir, &["query", &query_text, "--json", "-n", "10", "--min-score", "0.35"]).await {
+        match qmd(
+            dir,
+            &[
+                "query",
+                &query_text,
+                "--json",
+                "-n",
+                "10",
+                "--min-score",
+                "0.35",
+            ],
+        )
+        .await
+        {
             Ok(output) => {
                 let mut entries = parse_qmd_results(&output, &path_to_id, note_id);
-                entries.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                entries.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
                 let source_title = id_to_title.get(note_id).map(|s| s.as_str()).unwrap_or("?");
-                eprintln!("qmd: results for '{}' ({}):", &note_id[..8.min(note_id.len())], source_title);
+                eprintln!(
+                    "qmd: results for '{}' ({}):",
+                    &note_id[..8.min(note_id.len())],
+                    source_title
+                );
                 for e in &entries {
                     let t = id_to_title.get(&e.id).map(|s| s.as_str()).unwrap_or("?");
                     eprintln!("qmd:   {:.2}  {}", e.score, t);
                 }
                 let mut c = cache.write().await;
                 let gen = c.generation;
-                c.relations.insert(note_id.clone(), CacheEntry { gen, entries });
+                c.relations
+                    .insert(note_id.clone(), CacheEntry { gen, entries });
             }
             Err(e) => {
                 eprintln!("qmd: query failed for '{}': {e}", note_id);
@@ -418,7 +495,14 @@ fn canonical_stem(s: &str) -> String {
         .collect()
 }
 
-fn build_maps(app_handle: &tauri::AppHandle) -> (HashMap<String, String>, HashMap<String, String>, HashMap<String, Vec<String>>, HashMap<String, String>) {
+fn build_maps(
+    app_handle: &tauri::AppHandle,
+) -> (
+    HashMap<String, String>,
+    HashMap<String, String>,
+    HashMap<String, Vec<String>>,
+    HashMap<String, String>,
+) {
     let mut path_to_id = HashMap::new();
     let mut id_to_path = HashMap::new();
     let mut id_to_tags = HashMap::new();
@@ -455,7 +539,14 @@ fn build_maps(app_handle: &tauri::AppHandle) -> (HashMap<String, String>, HashMa
 /// Otherwise asks ollama to extract keywords from content.
 /// Returns (query_string, parsed_keywords) — keywords are only Some when ollama was called
 /// (used for auto-tagging notes that have no tags).
-async fn build_query(dir: &Path, title: &str, rel_path: Option<&String>, tags: &[String], has_ollama: bool, ollama_model: &str) -> (String, Option<Vec<String>>) {
+async fn build_query(
+    dir: &Path,
+    title: &str,
+    rel_path: Option<&String>,
+    tags: &[String],
+    has_ollama: bool,
+    ollama_model: &str,
+) -> (String, Option<Vec<String>>) {
     let is_meeting_note = tags.iter().any(|t| t.as_str() == "meeting");
 
     // For non-meeting notes, existing tags are enough and we skip ollama extraction.
@@ -593,7 +684,10 @@ fn parse_qmd_results(
         Some(s) => s,
         None => {
             if !output.trim().is_empty() {
-                eprintln!("qmd: no JSON found in output: {}", &output[..output.len().min(200)]);
+                eprintln!(
+                    "qmd: no JSON found in output: {}",
+                    &output[..output.len().min(200)]
+                );
             }
             return entries;
         }
@@ -631,7 +725,10 @@ fn parse_qmd_results(
     }
 
     if entries.is_empty() && !output.trim().is_empty() {
-        eprintln!("qmd: could not parse results: {}", &json_str[..json_str.len().min(200)]);
+        eprintln!(
+            "qmd: could not parse results: {}",
+            &json_str[..json_str.len().min(200)]
+        );
     }
 
     entries
@@ -835,7 +932,10 @@ pub async fn get_related_notes(
     // again and making A stale, ad infinitum.
     let entries = {
         let c = cache.read().await;
-        c.relations.get(&id).map(|e| e.entries.clone()).unwrap_or_default()
+        c.relations
+            .get(&id)
+            .map(|e| e.entries.clone())
+            .unwrap_or_default()
     };
 
     let index = state.index.lock().map_err(|e| e.to_string())?;
@@ -871,11 +971,14 @@ pub async fn regenerate_tags(
         return Err("Note content too short for keyword extraction".into());
     }
 
-    let keyword_model = state.model_settings.lock()
+    let keyword_model = state
+        .model_settings
+        .lock()
         .ok()
         .and_then(|ms| ms.keyword_model.clone())
         .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
-    let keywords_str = ollama_extract_keywords(&truncated, &keyword_model).await
+    let keywords_str = ollama_extract_keywords(&truncated, &keyword_model)
+        .await
         .ok_or("Ollama keyword extraction failed")?;
 
     let keywords: Vec<String> = keywords_str
@@ -944,7 +1047,13 @@ pub async fn check_tools() -> ToolStatus {
 
     eprintln!("qmd: tool check — git={git}, qmd={qmd}, ollama={ollama}, ffmpeg={ffmpeg}, whisper={whisper}");
 
-    ToolStatus { git, qmd, ollama, ffmpeg, whisper }
+    ToolStatus {
+        git,
+        qmd,
+        ollama,
+        ffmpeg,
+        whisper,
+    }
 }
 
 #[cfg(test)]
@@ -952,19 +1061,28 @@ mod tests {
     use super::*;
 
     fn make_path_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
-        entries.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
     fn resolve_direct_path() {
         let map = make_path_map(&[("notes/hello.md", "id1")]);
-        assert_eq!(resolve_path_to_id("notes/hello.md", &map), Some("id1".into()));
+        assert_eq!(
+            resolve_path_to_id("notes/hello.md", &map),
+            Some("id1".into())
+        );
     }
 
     #[test]
     fn resolve_qmd_uri() {
         let map = make_path_map(&[("hello.md", "id1")]);
-        assert_eq!(resolve_path_to_id("qmd://notes/hello.md", &map), Some("id1".into()));
+        assert_eq!(
+            resolve_path_to_id("qmd://notes/hello.md", &map),
+            Some("id1".into())
+        );
     }
 
     #[test]
@@ -1028,7 +1146,10 @@ mod tests {
     #[test]
     fn resolve_qmd_uri_with_leading_slashes() {
         let map = make_path_map(&[("hello.md", "id1")]);
-        assert_eq!(resolve_path_to_id("qmd:///notes/hello.md", &map), Some("id1".into()));
+        assert_eq!(
+            resolve_path_to_id("qmd:///notes/hello.md", &map),
+            Some("id1".into())
+        );
     }
 
     #[test]
@@ -1038,7 +1159,10 @@ mod tests {
             ("my_cool_note.md", "id1"),
             ("my-cool-note.md", "id1"), // normalized by build_maps
         ]);
-        assert_eq!(resolve_path_to_id("qmd://notes/my-cool-note.md", &map), Some("id1".into()));
+        assert_eq!(
+            resolve_path_to_id("qmd://notes/my-cool-note.md", &map),
+            Some("id1".into())
+        );
     }
 
     #[test]

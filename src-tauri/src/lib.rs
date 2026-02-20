@@ -70,9 +70,7 @@ fn resolve_setup_script(app_handle: &tauri::AppHandle, file_name: &str) -> Optio
 
 #[cfg(target_os = "macos")]
 fn open_terminal(command: &str) -> Result<(), String> {
-    let escaped = command
-        .replace('\\', "\\\\")
-        .replace('\"', "\\\"");
+    let escaped = command.replace('\\', "\\\\").replace('\"', "\\\"");
     let script = format!("tell application \"Terminal\" to do script \"{escaped}\"");
     let status = std::process::Command::new("osascript")
         .arg("-e")
@@ -96,48 +94,23 @@ fn open_terminal(command: &str) -> Result<(), String> {
     let mut attempts: Vec<(&str, Vec<String>)> = vec![
         (
             "x-terminal-emulator",
-            vec![
-                "-e".into(),
-                "bash".into(),
-                "-lc".into(),
-                wrapped.clone(),
-            ],
+            vec!["-e".into(), "bash".into(), "-lc".into(), wrapped.clone()],
         ),
         (
             "gnome-terminal",
-            vec![
-                "--".into(),
-                "bash".into(),
-                "-lc".into(),
-                wrapped.clone(),
-            ],
+            vec!["--".into(), "bash".into(), "-lc".into(), wrapped.clone()],
         ),
         (
             "konsole",
-            vec![
-                "-e".into(),
-                "bash".into(),
-                "-lc".into(),
-                wrapped.clone(),
-            ],
+            vec!["-e".into(), "bash".into(), "-lc".into(), wrapped.clone()],
         ),
         (
             "alacritty",
-            vec![
-                "-e".into(),
-                "bash".into(),
-                "-lc".into(),
-                wrapped.clone(),
-            ],
+            vec!["-e".into(), "bash".into(), "-lc".into(), wrapped.clone()],
         ),
         (
             "xterm",
-            vec![
-                "-e".into(),
-                "bash".into(),
-                "-lc".into(),
-                wrapped,
-            ],
+            vec!["-e".into(), "bash".into(), "-lc".into(), wrapped],
         ),
     ];
     let mut last_err: Option<String> = None;
@@ -275,7 +248,10 @@ fn save_note(
     let is_new = id.is_none();
     // Get old tags before saving to detect changes.
     let old_tags = id.as_ref().and_then(|existing_id| {
-        state.index.lock().ok()
+        state
+            .index
+            .lock()
+            .ok()
             .and_then(|idx| idx.notes.get(existing_id).map(|m| m.tags.clone()))
     });
     let meta = {
@@ -392,7 +368,11 @@ fn list_input_devices() -> Vec<recording::InputDeviceInfo> {
 }
 
 #[tauri::command]
-fn start_recording(state: State<AppState>, device: Option<String>, note_id: Option<String>) -> Result<String, String> {
+fn start_recording(
+    state: State<AppState>,
+    device: Option<String>,
+    note_id: Option<String>,
+) -> Result<String, String> {
     let rec = state.recording.lock().map_err(|e| e.to_string())?;
     if rec.state().active {
         return Err("Recording already in progress".to_string());
@@ -400,7 +380,13 @@ fn start_recording(state: State<AppState>, device: Option<String>, note_id: Opti
     let note_id = note_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let notes_dir = state.notes_dir.lock().map_err(|e| e.to_string())?.clone();
     let ms = state.model_settings.lock().map_err(|e| e.to_string())?;
-    rec.start(&note_id, &notes_dir, device, ms.summary_model.clone(), ms.whisper_model.clone());
+    rec.start(
+        &note_id,
+        &notes_dir,
+        device,
+        ms.summary_model.clone(),
+        ms.whisper_model.clone(),
+    );
     Ok(note_id)
 }
 
@@ -472,8 +458,8 @@ async fn resummarize_note(state: State<'_, AppState>, id: String) -> Result<Note
         let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
         let ms = state.model_settings.lock().map_err(|e| e.to_string())?;
         let index = state.index.lock().map_err(|e| e.to_string())?;
-        let transcript = notes::get_note_transcript(&dir, &id, &index)
-            .map_err(|e| e.to_string())?;
+        let transcript =
+            notes::get_note_transcript(&dir, &id, &index).map_err(|e| e.to_string())?;
         (dir.clone(), transcript, ms.summary_model.clone())
     };
 
@@ -506,7 +492,10 @@ fn get_recording_state(state: State<AppState>) -> Result<recording::RecordingSta
 }
 
 #[tauri::command]
-async fn check_pending_jobs(state: State<'_, AppState>, app_handle: tauri::AppHandle) -> Result<(), String> {
+async fn check_pending_jobs(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
     let notes_dir = state.notes_dir.lock().map_err(|e| e.to_string())?.clone();
     recording::resume_pending_jobs(&app_handle, &notes_dir).await;
     Ok(())
@@ -545,9 +534,14 @@ async fn list_ollama_models() -> Result<Vec<OllamaModelInfo>, String> {
         if let Ok(json) = resp.json::<serde_json::Value>().await {
             if let Some(arr) = json.get("models").and_then(|v| v.as_array()) {
                 for m in arr {
-                    let name = m.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let name = m
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let size = m.get("size").and_then(|v| v.as_u64());
-                    let param_size = m.get("details")
+                    let param_size = m
+                        .get("details")
                         .and_then(|d| d.get("parameter_size"))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
@@ -615,12 +609,17 @@ async fn list_whisper_models() -> Result<Vec<WhisperModelInfo>, String> {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().map(|e| e == "bin").unwrap_or(false) {
-                    let name = path.file_name()
+                    let name = path
+                        .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default();
                     let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                     let path_str = path.to_string_lossy().to_string();
-                    models.push(WhisperModelInfo { name, path: path_str, size_bytes: size });
+                    models.push(WhisperModelInfo {
+                        name,
+                        path: path_str,
+                        size_bytes: size,
+                    });
                 }
             }
         }
@@ -672,7 +671,11 @@ async fn pull_ollama_model(app_handle: tauri::AppHandle, name: String) -> Result
             }
 
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let status = json
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let completed = json.get("completed").and_then(|v| v.as_u64());
                 let total = json.get("total").and_then(|v| v.as_u64());
 
@@ -680,12 +683,15 @@ async fn pull_ollama_model(app_handle: tauri::AppHandle, name: String) -> Result
                     return Err(format!("ollama pull failed: {error}"));
                 }
 
-                let _ = app_handle.emit("ollama-pull-progress", OllamaPullProgress {
-                    model: name.clone(),
-                    status: status.clone(),
-                    completed,
-                    total,
-                });
+                let _ = app_handle.emit(
+                    "ollama-pull-progress",
+                    OllamaPullProgress {
+                        model: name.clone(),
+                        status: status.clone(),
+                        completed,
+                        total,
+                    },
+                );
             }
         }
     }
@@ -699,15 +705,22 @@ async fn pull_ollama_model(app_handle: tauri::AppHandle, name: String) -> Result
                 if let Some(error) = json.get("error").and_then(|v| v.as_str()) {
                     return Err(format!("ollama pull failed: {error}"));
                 }
-                let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let status = json
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let completed = json.get("completed").and_then(|v| v.as_u64());
                 let total = json.get("total").and_then(|v| v.as_u64());
-                let _ = app_handle.emit("ollama-pull-progress", OllamaPullProgress {
-                    model: name.clone(),
-                    status,
-                    completed,
-                    total,
-                });
+                let _ = app_handle.emit(
+                    "ollama-pull-progress",
+                    OllamaPullProgress {
+                        model: name.clone(),
+                        status,
+                        completed,
+                        total,
+                    },
+                );
             }
         }
     }
@@ -729,7 +742,11 @@ pub fn run() {
             let handle = app.handle().clone();
             let model_settings = load_model_settings(&default_dir);
             let git = GitSyncHandle::new(&default_dir, handle.clone());
-            let qmd = QmdHandle::new(&default_dir, handle.clone(), model_settings.keyword_model.clone());
+            let qmd = QmdHandle::new(
+                &default_dir,
+                handle.clone(),
+                model_settings.keyword_model.clone(),
+            );
             let rec = RecordingHandle::new(handle);
             app.manage(AppState {
                 notes_dir: Mutex::new(default_dir),

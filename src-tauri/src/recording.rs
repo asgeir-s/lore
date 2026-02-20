@@ -78,8 +78,7 @@ impl RecordingJob {
     pub fn save(&self) -> Result<(), String> {
         let path = Self::job_path(&self.notes_dir, &self.note_id);
         let tmp = path.with_extension("tmp");
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| format!("serialize job: {e}"))?;
+        let json = serde_json::to_string_pretty(self).map_err(|e| format!("serialize job: {e}"))?;
         std::fs::write(&tmp, &json).map_err(|e| format!("write job tmp: {e}"))?;
         std::fs::rename(&tmp, &path).map_err(|e| format!("rename job: {e}"))?;
         Ok(())
@@ -161,8 +160,7 @@ impl RecordingHandle {
     pub fn new(app_handle: tauri::AppHandle) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let active = Arc::new(AtomicBool::new(false));
-        let note_id: Arc<std::sync::Mutex<Option<String>>> =
-            Arc::new(std::sync::Mutex::new(None));
+        let note_id: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
         let elapsed = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
         let worker_active = active.clone();
@@ -170,7 +168,14 @@ impl RecordingHandle {
         let worker_elapsed = elapsed.clone();
 
         tauri::async_runtime::spawn(async move {
-            run_worker(rx, app_handle, worker_active, worker_note_id, worker_elapsed).await;
+            run_worker(
+                rx,
+                app_handle,
+                worker_active,
+                worker_note_id,
+                worker_elapsed,
+            )
+            .await;
         });
 
         Self {
@@ -181,7 +186,14 @@ impl RecordingHandle {
         }
     }
 
-    pub fn start(&self, note_id: &str, notes_dir: &str, preferred_device: Option<String>, summary_model: Option<String>, whisper_model: Option<String>) {
+    pub fn start(
+        &self,
+        note_id: &str,
+        notes_dir: &str,
+        preferred_device: Option<String>,
+        summary_model: Option<String>,
+        whisper_model: Option<String>,
+    ) {
         let _ = self.tx.send(Msg::Start {
             note_id: note_id.to_string(),
             notes_dir: notes_dir.to_string(),
@@ -219,7 +231,13 @@ async fn run_worker(
 ) {
     loop {
         match rx.recv().await {
-            Some(Msg::Start { note_id, notes_dir, preferred_device, summary_model, whisper_model }) => {
+            Some(Msg::Start {
+                note_id,
+                notes_dir,
+                preferred_device,
+                summary_model,
+                whisper_model,
+            }) => {
                 let audio_dir = PathBuf::from(&notes_dir).join("meetings/.audio");
                 if let Err(e) = std::fs::create_dir_all(&audio_dir) {
                     eprintln!("recording: failed to create audio dir: {e}");
@@ -295,11 +313,14 @@ async fn run_worker(
                         seconds = seconds.wrapping_add(1);
                         let secs = seconds / 6; // ~150ms ticks → seconds
                         elapsed_clone.store(secs, Ordering::Relaxed);
-                        let _ = app_clone.emit("recording-tick", TickPayload {
-                            elapsed_seconds: secs,
-                            mic_level: level_take(&mic_level),
-                            system_level: level_take(&system_level),
-                        });
+                        let _ = app_clone.emit(
+                            "recording-tick",
+                            TickPayload {
+                                elapsed_seconds: secs,
+                                mic_level: level_take(&mic_level),
+                                system_level: level_take(&system_level),
+                            },
+                        );
                     }
                 });
 
@@ -336,7 +357,13 @@ async fn run_worker(
                             let sm = summary_model.clone();
                             let wm = whisper_model.clone();
                             tauri::async_runtime::spawn(async move {
-                                process_recording(&app_handle_clone, &mut job, sm.as_deref(), wm.as_deref()).await;
+                                process_recording(
+                                    &app_handle_clone,
+                                    &mut job,
+                                    sm.as_deref(),
+                                    wm.as_deref(),
+                                )
+                                .await;
                             });
 
                             if let Ok(mut slot) = note_id_slot.lock() {
@@ -453,9 +480,17 @@ fn capture_audio(
         if let Some(output_device) = host.default_output_device() {
             eprintln!(
                 "recording: capturing system audio from output device: {}",
-                output_device.description().map(|d| d.name().to_owned()).unwrap_or_default()
+                output_device
+                    .description()
+                    .map(|d| d.name().to_owned())
+                    .unwrap_or_default()
             );
-            record_loopback(&output_device, &system_path_owned, system_stop, Some(system_level))?;
+            record_loopback(
+                &output_device,
+                &system_path_owned,
+                system_stop,
+                Some(system_level),
+            )?;
         }
         Ok(())
     });
@@ -466,7 +501,8 @@ fn capture_audio(
         find_device_by_name(&host, pref).unwrap_or_else(|| {
             eprintln!("recording: preferred device '{pref}' not found, falling back to heuristic");
             pick_best_input_device(&host).unwrap_or_else(|_| {
-                host.default_input_device().expect("No input device available")
+                host.default_input_device()
+                    .expect("No input device available")
             })
         })
     } else {
@@ -475,7 +511,10 @@ fn capture_audio(
 
     eprintln!(
         "recording: using mic device: {}",
-        mic_device.description().map(|d| d.name().to_owned()).unwrap_or_default()
+        mic_device
+            .description()
+            .map(|d| d.name().to_owned())
+            .unwrap_or_default()
     );
 
     record_device(&mic_device, mic_path, stop, Some(mic_level))?;
@@ -535,7 +574,11 @@ fn find_device_by_name(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
     use cpal::traits::{DeviceTrait, HostTrait};
 
     host.input_devices().ok()?.find(|d| {
-        d.description().map(|desc| desc.name().to_owned()).ok().as_deref() == Some(name)
+        d.description()
+            .map(|desc| desc.name().to_owned())
+            .ok()
+            .as_deref()
+            == Some(name)
     })
 }
 
@@ -557,7 +600,11 @@ fn pick_best_input_device(host: &cpal::Host) -> Result<cpal::Device, String> {
     // Dedicated USB mics (SoloCast, Yeti, etc.) > webcam mics > monitor mics > built-in.
     let mut best: Option<(i32, cpal::Device)> = None;
     for device in devices {
-        let name = device.description().map(|d| d.name().to_owned()).unwrap_or_default().to_lowercase();
+        let name = device
+            .description()
+            .map(|d| d.name().to_owned())
+            .unwrap_or_default()
+            .to_lowercase();
 
         // Skip non-mic devices (virtual, loopback, display output).
         if name.contains("loopback") || name.contains("virtual") {
@@ -582,7 +629,12 @@ fn pick_best_input_device(host: &cpal::Host) -> Result<cpal::Device, String> {
             50 // Webcam mic — decent fallback
         } else if name.contains("macbook") || name.contains("built-in") {
             30 // Built-in mic
-        } else if name.contains("display") || name.contains("monitor") || name.contains("lg ") || name.contains("dell ") || name.contains("samsung") {
+        } else if name.contains("display")
+            || name.contains("monitor")
+            || name.contains("lg ")
+            || name.contains("dell ")
+            || name.contains("samsung")
+        {
             10 // Monitor mic — usually bad quality
         } else {
             40 // Unknown device — rank it middle
@@ -645,9 +697,7 @@ fn record_device_inner(
     let sample_format = config.sample_format();
     let label = if loopback { "system" } else { "mic" };
 
-    eprintln!(
-        "recording: [{label}] config: {sample_rate}Hz, {channels}ch, {sample_format:?}"
-    );
+    eprintln!("recording: [{label}] config: {sample_rate}Hz, {channels}ch, {sample_format:?}");
 
     let spec = hound::WavSpec {
         channels,
@@ -687,7 +737,10 @@ fn record_device_inner(
                         let nz = data.iter().filter(|&&s| s != 0).count() as u64;
                         nonzero.fetch_add(nz, Ordering::Relaxed);
                         if let Some(ref lvl) = level {
-                            let peak = data.iter().map(|&s| (s as f32 / 32768.0).abs()).fold(0.0_f32, f32::max);
+                            let peak = data
+                                .iter()
+                                .map(|&s| (s as f32 / 32768.0).abs())
+                                .fold(0.0_f32, f32::max);
                             level_store(lvl, peak);
                         }
                         if let Ok(mut guard) = writer.lock() {
@@ -753,7 +806,11 @@ fn record_device_inner(
     let nonzero = nonzero_samples.load(Ordering::Relaxed);
     eprintln!(
         "recording: [{label}] done — {total} samples, {nonzero} non-zero ({:.1}%)",
-        if total > 0 { nonzero as f64 / total as f64 * 100.0 } else { 0.0 }
+        if total > 0 {
+            nonzero as f64 / total as f64 * 100.0
+        } else {
+            0.0
+        }
     );
 
     // Finalize WAV.
@@ -797,7 +854,13 @@ async fn process_recording(
             if let Err(e) = &mix_ok {
                 eprintln!("recording: mix failed: {e}");
                 let _ = app_handle.emit("recording-error", format!("Audio mixing failed: {e}"));
-                create_error_note(app_handle, &job.notes_dir, &job.note_id, "Audio processing failed").await;
+                create_error_note(
+                    app_handle,
+                    &job.notes_dir,
+                    &job.note_id,
+                    "Audio processing failed",
+                )
+                .await;
                 job.delete();
                 return;
             }
@@ -818,7 +881,12 @@ async fn process_recording(
         if job.transcript.is_some() {
             eprintln!("recording: transcript already available, skipping");
         } else {
-            emit_progress(app_handle, &job.note_id, "transcribing", "Transcribing audio...");
+            emit_progress(
+                app_handle,
+                &job.note_id,
+                "transcribing",
+                "Transcribing audio...",
+            );
             let transcript = transcribe(&final_wav, whisper_model_override).await;
 
             match transcript {
@@ -827,10 +895,8 @@ async fn process_recording(
                 }
                 Err(e) => {
                     eprintln!("recording: transcription failed: {e}");
-                    let _ = app_handle.emit(
-                        "recording-error",
-                        format!("Transcription failed: {e}"),
-                    );
+                    let _ =
+                        app_handle.emit("recording-error", format!("Transcription failed: {e}"));
                     create_error_note(
                         app_handle,
                         &job.notes_dir,
@@ -858,11 +924,18 @@ async fn process_recording(
         if job.summary.is_some() {
             eprintln!("recording: summary already available, skipping");
         } else {
-            emit_progress(app_handle, &job.note_id, "summarizing", "Summarizing transcript...");
-            let summary = summarize(&transcript_text, summary_model_override).await.unwrap_or_else(|e| {
-                eprintln!("recording: summarization failed: {e}");
-                "*Summary unavailable — ollama not reachable.*".to_string()
-            });
+            emit_progress(
+                app_handle,
+                &job.note_id,
+                "summarizing",
+                "Summarizing transcript...",
+            );
+            let summary = summarize(&transcript_text, summary_model_override)
+                .await
+                .unwrap_or_else(|e| {
+                    eprintln!("recording: summarization failed: {e}");
+                    "*Summary unavailable — ollama not reachable.*".to_string()
+                });
             job.summary = Some(summary);
         }
 
@@ -876,7 +949,11 @@ async fn process_recording(
     let note_exists = app_handle
         .try_state::<AppState>()
         .and_then(|state| {
-            state.index.lock().ok().map(|idx| idx.notes.contains_key(&job.note_id))
+            state
+                .index
+                .lock()
+                .ok()
+                .map(|idx| idx.notes.contains_key(&job.note_id))
         })
         .unwrap_or(false);
 
@@ -884,21 +961,39 @@ async fn process_recording(
         // Note already exists in the index — let the frontend append transcript/summary
         emit_progress(app_handle, &job.note_id, "saving", "Saving meeting data...");
         job.delete();
-        let _ = app_handle.emit("recording-complete", RecordingCompletePayload {
-            note_id: job.note_id.clone(),
-            summary: Some(summary),
-            transcript: Some(transcript_text),
-        });
+        let _ = app_handle.emit(
+            "recording-complete",
+            RecordingCompletePayload {
+                note_id: job.note_id.clone(),
+                summary: Some(summary),
+                transcript: Some(transcript_text),
+            },
+        );
     } else {
         // No existing note — create a new meeting note
-        emit_progress(app_handle, &job.note_id, "saving", "Creating meeting note...");
-        create_meeting_note(app_handle, &job.notes_dir, &job.note_id, &summary, &transcript_text).await;
+        emit_progress(
+            app_handle,
+            &job.note_id,
+            "saving",
+            "Creating meeting note...",
+        );
+        create_meeting_note(
+            app_handle,
+            &job.notes_dir,
+            &job.note_id,
+            &summary,
+            &transcript_text,
+        )
+        .await;
         job.delete();
-        let _ = app_handle.emit("recording-complete", RecordingCompletePayload {
-            note_id: job.note_id.clone(),
-            summary: None,
-            transcript: None,
-        });
+        let _ = app_handle.emit(
+            "recording-complete",
+            RecordingCompletePayload {
+                note_id: job.note_id.clone(),
+                summary: None,
+                transcript: None,
+            },
+        );
     }
 }
 
@@ -1034,15 +1129,15 @@ async fn find_whisper_model(override_name: Option<&str>) -> Option<PathBuf> {
     None
 }
 
-pub async fn transcribe(wav_path: &Path, whisper_model_override: Option<&str>) -> Result<String, String> {
+pub async fn transcribe(
+    wav_path: &Path,
+    whisper_model_override: Option<&str>,
+) -> Result<String, String> {
     let model = find_whisper_model(whisper_model_override)
         .await
         .ok_or_else(|| "No whisper model found. Download a ggml model.".to_string())?;
 
-    eprintln!(
-        "recording: transcribing with model {}",
-        model.display()
-    );
+    eprintln!("recording: transcribing with model {}", model.display());
 
     let wav_str = wav_path.to_string_lossy();
     let model_str = model.to_string_lossy();
@@ -1088,7 +1183,7 @@ pub async fn transcribe(wav_path: &Path, whisper_model_override: Option<&str>) -
     if text.is_empty() {
         Err("whisper produced no output".to_string())
     } else {
-        Ok(text)
+        Ok(collapse_repeated_plain_lines(&text))
     }
 }
 
@@ -1096,7 +1191,7 @@ fn parse_whisper_json(json: &str) -> Result<String, String> {
     let val: serde_json::Value =
         serde_json::from_str(json).map_err(|e| format!("Parse whisper JSON: {e}"))?;
 
-    let mut lines = Vec::new();
+    let mut segments = Vec::new();
 
     if let Some(transcription) = val.get("transcription").and_then(|v| v.as_array()) {
         for segment in transcription {
@@ -1107,7 +1202,11 @@ fn parse_whisper_json(json: &str) -> Result<String, String> {
                 .trim();
             if !text.is_empty() {
                 // Prefer offsets (milliseconds) over timestamp strings.
-                let ts = if let Some(ms) = segment.get("offsets").and_then(|o| o.get("from")).and_then(|v| v.as_u64()) {
+                let ts = if let Some(ms) = segment
+                    .get("offsets")
+                    .and_then(|o| o.get("from"))
+                    .and_then(|v| v.as_u64())
+                {
                     let total_secs = ms / 1000;
                     let mins = total_secs / 60;
                     let secs = total_secs % 60;
@@ -1120,20 +1219,131 @@ fn parse_whisper_json(json: &str) -> Result<String, String> {
                         .unwrap_or("00:00:00");
                     format_timestamp(start)
                 };
-                lines.push(format!("[{ts}] {text}"));
+                segments.push(TranscriptSegment {
+                    ts,
+                    text: text.to_string(),
+                });
             }
         }
     }
 
-    if lines.is_empty() {
+    if segments.is_empty() {
         // Try top-level "text" field.
         if let Some(text) = val.get("text").and_then(|v| v.as_str()) {
-            return Ok(text.trim().to_string());
+            return Ok(collapse_repeated_plain_lines(text.trim()));
         }
         return Err("No transcription data found".to_string());
     }
 
+    let (segments, removed) = collapse_repeated_segments(segments);
+    if removed > 0 {
+        eprintln!("recording: filtered {removed} repeated transcript segment(s)");
+    }
+
+    let lines = segments
+        .into_iter()
+        .map(|segment| format!("[{}] {}", segment.ts, segment.text))
+        .collect::<Vec<_>>();
+
     Ok(lines.join("\n"))
+}
+
+#[derive(Clone, Debug)]
+struct TranscriptSegment {
+    ts: String,
+    text: String,
+}
+
+fn collapse_repeated_segments(segments: Vec<TranscriptSegment>) -> (Vec<TranscriptSegment>, usize) {
+    if segments.len() <= 1 {
+        return (segments, 0);
+    }
+
+    let keys = segments
+        .iter()
+        .map(|segment| dedupe_key(&segment.text))
+        .collect::<Vec<_>>();
+
+    let mut filtered = Vec::with_capacity(segments.len());
+    let mut removed = 0usize;
+    let mut i = 0usize;
+
+    while i < segments.len() {
+        let key = &keys[i];
+        let mut j = i + 1;
+        while j < segments.len() && !key.is_empty() && keys[j] == *key {
+            j += 1;
+        }
+
+        let run = &segments[i..j];
+        if should_collapse_duplicate_run(key, run) {
+            filtered.push(segments[i].clone());
+            removed += run.len().saturating_sub(1);
+        } else {
+            filtered.extend(run.iter().cloned());
+        }
+        i = j;
+    }
+
+    (filtered, removed)
+}
+
+fn should_collapse_duplicate_run(key: &str, run: &[TranscriptSegment]) -> bool {
+    if key.is_empty() || run.len() <= 1 {
+        return false;
+    }
+
+    // If whisper emits the same segment at the same timestamp, it is always noise.
+    let same_timestamp = run.windows(2).all(|pair| pair[0].ts == pair[1].ts);
+    if same_timestamp {
+        return true;
+    }
+
+    let word_count = key.split_whitespace().count();
+    // Preserve normal short repetition, but collapse obvious runaway loops.
+    (run.len() >= 4 && word_count >= 3) || run.len() >= 10
+}
+
+fn dedupe_key(text: &str) -> String {
+    text.split_whitespace()
+        .filter_map(|token| {
+            let cleaned = token.trim_matches(|c: char| !c.is_alphanumeric());
+            if cleaned.is_empty() {
+                None
+            } else {
+                Some(cleaned.to_lowercase())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn collapse_repeated_plain_lines(text: &str) -> String {
+    let lines = text
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(TranscriptSegment {
+                    ts: String::new(),
+                    text: trimmed.to_string(),
+                })
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if lines.len() <= 1 {
+        return text.trim().to_string();
+    }
+
+    let (filtered, _) = collapse_repeated_segments(lines);
+    filtered
+        .into_iter()
+        .map(|segment| segment.text)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Convert timestamp string like "00:01:30,500" or "00:01:30.500" to "01:30".
@@ -1164,15 +1374,14 @@ async fn find_ollama_model(override_model: Option<&str>) -> Option<String> {
                 return Some(name.to_string());
             }
         }
-        eprintln!("recording: configured summary model '{name}' not available, falling back to auto");
+        eprintln!(
+            "recording: configured summary model '{name}' not available, falling back to auto"
+        );
     }
 
     let candidates = ["llama3.2", "mistral", "qwen2.5:7b", "qwen2.5:1.5b"];
     for model in &candidates {
-        let out = cmd("ollama")
-            .args(["show", model])
-            .output()
-            .await;
+        let out = cmd("ollama").args(["show", model]).output().await;
         if let Ok(o) = out {
             if o.status.success() {
                 return Some(model.to_string());
@@ -1182,7 +1391,10 @@ async fn find_ollama_model(override_model: Option<&str>) -> Option<String> {
     None
 }
 
-pub async fn summarize(transcript: &str, summary_model_override: Option<&str>) -> Result<String, String> {
+pub async fn summarize(
+    transcript: &str,
+    summary_model_override: Option<&str>,
+) -> Result<String, String> {
     let model = find_ollama_model(summary_model_override)
         .await
         .ok_or_else(|| "No ollama model available".to_string())?;
@@ -1191,10 +1403,20 @@ pub async fn summarize(transcript: &str, summary_model_override: Option<&str>) -
 
     // Detect language by checking for common Norwegian words.
     let lower = transcript.to_lowercase();
-    let norwegian_markers = [" og ", " er ", " det ", " som ", " har ", " med ", " for ", " på ", " til ", " ikke "];
-    let english_markers = [" the ", " and ", " is ", " that ", " have ", " with ", " for ", " this ", " not ", " are "];
-    let no_score: usize = norwegian_markers.iter().filter(|w| lower.contains(*w)).count();
-    let en_score: usize = english_markers.iter().filter(|w| lower.contains(*w)).count();
+    let norwegian_markers = [
+        " og ", " er ", " det ", " som ", " har ", " med ", " for ", " på ", " til ", " ikke ",
+    ];
+    let english_markers = [
+        " the ", " and ", " is ", " that ", " have ", " with ", " for ", " this ", " not ", " are ",
+    ];
+    let no_score: usize = norwegian_markers
+        .iter()
+        .filter(|w| lower.contains(*w))
+        .count();
+    let en_score: usize = english_markers
+        .iter()
+        .filter(|w| lower.contains(*w))
+        .count();
     let is_norwegian = no_score > en_score;
 
     let prompt = if is_norwegian {
@@ -1316,7 +1538,10 @@ pub async fn resume_pending_jobs(app_handle: &tauri::AppHandle, notes_dir: &str)
             let mic_exists = PathBuf::from(&job.mic_path).exists();
             let final_exists = PathBuf::from(&job.final_wav_path).exists();
             if !mic_exists && !final_exists {
-                eprintln!("recording: no audio found for job {}, deleting", job.note_id);
+                eprintln!(
+                    "recording: no audio found for job {}, deleting",
+                    job.note_id
+                );
                 job.delete();
                 continue;
             }
@@ -1324,7 +1549,12 @@ pub async fn resume_pending_jobs(app_handle: &tauri::AppHandle, notes_dir: &str)
             let _ = job.save();
         }
 
-        emit_progress(app_handle, &job.note_id, "resuming", "Resuming processing...");
+        emit_progress(
+            app_handle,
+            &job.note_id,
+            "resuming",
+            "Resuming processing...",
+        );
         // Resumed jobs use auto-detect (no model override persisted in job file).
         process_recording(app_handle, &mut job, None, None).await;
     }
@@ -1388,9 +1618,66 @@ async fn create_error_note(
     }
 
     let _ = app_handle.emit("notes-changed", ());
-    let _ = app_handle.emit("recording-complete", RecordingCompletePayload {
-        note_id: note_id.to_string(),
-        summary: None,
-        transcript: None,
-    });
+    let _ = app_handle.emit(
+        "recording-complete",
+        RecordingCompletePayload {
+            note_id: note_id.to_string(),
+            summary: None,
+            transcript: None,
+        },
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_whisper_json_collapses_runaway_duplicates() {
+        let json = r#"{
+            "transcription": [
+                { "text": "We should roll this back before release.", "offsets": { "from": 0 } },
+                { "text": "we should roll this back before release", "offsets": { "from": 1000 } },
+                { "text": "We should roll this back before release!", "offsets": { "from": 2000 } },
+                { "text": "We should roll this back before release.", "offsets": { "from": 3000 } },
+                { "text": "New point starts here.", "offsets": { "from": 4000 } }
+            ]
+        }"#;
+
+        let parsed = parse_whisper_json(json).expect("json should parse");
+        let lines = parsed.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "[00:00] We should roll this back before release.");
+        assert_eq!(lines[1], "[00:04] New point starts here.");
+    }
+
+    #[test]
+    fn parse_whisper_json_keeps_short_repetition() {
+        let json = r#"{
+            "transcription": [
+                { "text": "yes", "offsets": { "from": 0 } },
+                { "text": "yes", "offsets": { "from": 1000 } },
+                { "text": "yes", "offsets": { "from": 2000 } }
+            ]
+        }"#;
+
+        let parsed = parse_whisper_json(json).expect("json should parse");
+        let lines = parsed.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn parse_whisper_json_collapses_exact_duplicate_timestamp_segments() {
+        let json = r#"{
+            "transcription": [
+                { "text": "This sentence repeated at same time.", "offsets": { "from": 3000 } },
+                { "text": "This sentence repeated at same time.", "offsets": { "from": 3000 } }
+            ]
+        }"#;
+
+        let parsed = parse_whisper_json(json).expect("json should parse");
+        let lines = parsed.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], "[00:03] This sentence repeated at same time.");
+    }
 }

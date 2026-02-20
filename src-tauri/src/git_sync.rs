@@ -267,12 +267,7 @@ async fn do_pull_and_reindex(
 
         if let Err(rebase_err) = git(
             dir,
-            &[
-                "-c",
-                "rebase.autoStash=true",
-                "rebase",
-                &target.remote_ref,
-            ],
+            &["-c", "rebase.autoStash=true", "rebase", &target.remote_ref],
         )
         .await
         {
@@ -399,7 +394,9 @@ async fn push_with_retry(
 async fn push_current_branch(dir: &Path) -> Result<(), String> {
     match git(dir, &["push"]).await {
         Ok(_) => Ok(()),
-        Err(e) if needs_upstream(&e) => git(dir, &["push", "-u", "origin", "HEAD"]).await.map(|_| ()),
+        Err(e) if needs_upstream(&e) => git(dir, &["push", "-u", "origin", "HEAD"])
+            .await
+            .map(|_| ()),
         Err(e) => Err(e),
     }
 }
@@ -524,7 +521,8 @@ fn write_conflict_copy(dir: &Path, rel: &str, content: &str) -> Result<String, S
 
     let content = ensure_note_id_for_copy(content);
     let abs_copy = dir.join(&rel_copy);
-    std::fs::write(&abs_copy, content).map_err(|e| format!("write conflict copy {}: {e}", abs_copy.display()))?;
+    std::fs::write(&abs_copy, content)
+        .map_err(|e| format!("write conflict copy {}: {e}", abs_copy.display()))?;
 
     Ok(rel_copy.to_string_lossy().to_string())
 }
@@ -580,7 +578,11 @@ async fn resolve_sync_target(dir: &Path) -> Result<SyncTarget, String> {
     }
 
     // Otherwise use remote default branch.
-    if let Ok(default_ref) = git(dir, &["symbolic-ref", "refs/remotes/origin/HEAD", "--short"]).await
+    if let Ok(default_ref) = git(
+        dir,
+        &["symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
+    )
+    .await
     {
         let default_ref = default_ref.trim();
         if !default_ref.is_empty() {
@@ -598,7 +600,9 @@ async fn resolve_sync_target(dir: &Path) -> Result<SyncTarget, String> {
 }
 
 async fn remote_ref_exists(dir: &Path, remote_ref: &str) -> bool {
-    git(dir, &["rev-parse", "--verify", remote_ref]).await.is_ok()
+    git(dir, &["rev-parse", "--verify", remote_ref])
+        .await
+        .is_ok()
 }
 
 async fn ahead_behind(dir: &Path, remote_ref: &str) -> Result<(usize, usize), String> {
@@ -623,11 +627,7 @@ async fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     git_with_env(dir, args, &[]).await
 }
 
-async fn git_with_env(
-    dir: &Path,
-    args: &[&str],
-    envs: &[(&str, &str)],
-) -> Result<String, String> {
+async fn git_with_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Result<String, String> {
     let mut cmd = Command::new("git");
     cmd.args(args).current_dir(dir);
     for (key, value) in envs {
@@ -682,12 +682,7 @@ fn emit_notes_changed(app_handle: &tauri::AppHandle) {
 /// Ensure the notes directory is a git repo. If not, init one.
 async fn ensure_git_repo(dir: &Path) -> Result<(), String> {
     // Check if git is available.
-    if Command::new("git")
-        .arg("--version")
-        .output()
-        .await
-        .is_err()
-    {
+    if Command::new("git").arg("--version").output().await.is_err() {
         return Err("git not found".into());
     }
 
@@ -736,7 +731,11 @@ async fn commit_leftover_md(dir: &Path) -> Result<(), String> {
 
     let diff = git(dir, &["diff", "--cached", "--quiet"]).await;
     if diff.is_err() {
-        git(dir, &["commit", "-m", "Auto-commit: recover unsaved changes"]).await?;
+        git(
+            dir,
+            &["commit", "-m", "Auto-commit: recover unsaved changes"],
+        )
+        .await?;
     }
     Ok(())
 }
@@ -766,8 +765,11 @@ async fn commit_leftover_sync_files(dir: &Path) -> Result<(), String> {
 
     let diff = git(dir, &["diff", "--cached", "--quiet"]).await;
     if diff.is_err() {
-        git(dir, &["commit", "-m", "Auto-commit: local changes before sync"])
-            .await?;
+        git(
+            dir,
+            &["commit", "-m", "Auto-commit: local changes before sync"],
+        )
+        .await?;
     }
 
     Ok(())
@@ -853,7 +855,11 @@ pub fn get_git_remote(state: State<AppState>) -> Result<Option<String>, String> 
 }
 
 async fn resolve_remote_branch_for_setup(dir: &Path) -> Result<String, String> {
-    if let Ok(default_ref) = git(dir, &["symbolic-ref", "refs/remotes/origin/HEAD", "--short"]).await
+    if let Ok(default_ref) = git(
+        dir,
+        &["symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
+    )
+    .await
     {
         let default_ref = default_ref.trim();
         if let Some(branch) = default_ref.strip_prefix("origin/") {
@@ -899,8 +905,16 @@ pub async fn set_git_remote(
     let branch = resolve_remote_branch_for_setup(&dir).await?;
     let remote_ref = format!("origin/{branch}");
     if remote_ref_exists(&dir, &remote_ref).await {
-        let pull_res = if has_local_commit(&dir).await && git(&dir, &["merge-base", "HEAD", &remote_ref]).await.is_ok() {
-            git(&dir, &["pull", "--rebase", "--autostash", "origin", &branch]).await
+        let pull_res = if has_local_commit(&dir).await
+            && git(&dir, &["merge-base", "HEAD", &remote_ref])
+                .await
+                .is_ok()
+        {
+            git(
+                &dir,
+                &["pull", "--rebase", "--autostash", "origin", &branch],
+            )
+            .await
         } else {
             git(
                 &dir,
