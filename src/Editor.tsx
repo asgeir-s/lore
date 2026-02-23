@@ -14,10 +14,52 @@ import { history } from "@codemirror/commands";
 import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import { vim, Vim } from "@replit/codemirror-vim";
+import { readText as tauriReadClipboard, writeText as tauriWriteClipboard } from "@tauri-apps/plugin-clipboard-manager";
 
 Vim.map("fd", "<Esc>", "insert");
 Vim.unmap("<Space>", "normal");
 Vim.map("<Space>fs", ":w<CR>", "normal");
+
+// System clipboard integration via Tauri clipboard plugin.
+// We use the * register (which does NOT trigger navigator.clipboard) and
+// back it with Tauri's native clipboard API to avoid the webview permission prompt.
+let _clipboardCache = "";
+tauriReadClipboard().then((t) => { if (t) _clipboardCache = t; }).catch(() => {});
+
+export async function _syncVimClipboard() {
+  try {
+    const text = await tauriReadClipboard();
+    if (text != null && text !== _clipboardCache) {
+      _clipboardCache = text;
+      _origStarSetText.call(_starReg, text, false, false);
+    }
+  } catch { /* clipboard unavailable */ }
+}
+
+const _rc = Vim.getRegisterController();
+const _starReg = _rc.getRegister("*");
+const _origStarSetText = _starReg.setText.bind(_starReg);
+_starReg.setText = function (text?: string, linewise?: boolean, blockwise?: boolean) {
+  _origStarSetText(text, linewise, blockwise);
+  if (text) {
+    _clipboardCache = text;
+    tauriWriteClipboard(text).catch(() => {});
+  }
+};
+_starReg.toString = function () {
+  return _clipboardCache;
+};
+
+// Map default yank, delete, and paste to use the * register
+Vim.noremap("y", '"*y', "normal");
+Vim.noremap("Y", '"*Y', "normal");
+Vim.noremap("p", '"*p', "normal");
+Vim.noremap("P", '"*P', "normal");
+Vim.noremap("d", '"*d', "normal");
+Vim.noremap("D", '"*D', "normal");
+Vim.noremap("y", '"*y', "visual");
+Vim.noremap("d", '"*d', "visual");
+Vim.noremap("p", '"*p', "visual");
 
 const saveCallbacks = new WeakMap<EditorView, () => void>();
 Vim.defineEx("w", "w", (cm: any) => {
@@ -308,6 +350,12 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
       viewRef.current = view;
       saveCallbacks.set(view, () => onSaveRef.current());
 
+      // Sync system clipboard into vim * register on focus
+      const handleEditorFocus = () => { _syncVimClipboard(); };
+      view.contentDOM.addEventListener("focus", handleEditorFocus, true);
+      const handleVisibilityChange = () => { if (!document.hidden) _syncVimClipboard(); };
+      document.addEventListener("visibilitychange", handleVisibilityChange);
+
       // Cmd+hover to show pointer on links
       const handleMouseMove = (event: MouseEvent) => {
         if (event.metaKey || event.ctrlKey) {
@@ -344,6 +392,8 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
       window.addEventListener("keyup", handleKeyChange);
 
       return () => {
+        view.contentDOM.removeEventListener("focus", handleEditorFocus, true);
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
         view.dom.removeEventListener("click", handleClick);
         view.dom.removeEventListener("mousemove", handleMouseMove);
         window.removeEventListener("keyup", handleKeyChange);
