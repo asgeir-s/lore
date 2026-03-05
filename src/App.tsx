@@ -104,6 +104,7 @@ export default function App() {
     null,
   );
   const gPendingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const zoomApplyRequest = useRef(0);
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [toolStatus, setToolStatus] = useState<ToolStatus | null>(null);
@@ -238,8 +239,25 @@ export default function App() {
 
   // Apply zoom
   useEffect(() => {
-    document.documentElement.style.zoom = `${zoom}%`;
     localStorage.setItem("note-zoom", String(zoom));
+    const scaleFactor = zoom / 100;
+    const requestId = ++zoomApplyRequest.current;
+
+    const applyZoom = async () => {
+      try {
+        const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+        await getCurrentWebview().setZoom(scaleFactor);
+        if (zoomApplyRequest.current !== requestId) return;
+        // Clear any fallback CSS zoom after native zoom is applied.
+        document.documentElement.style.zoom = "";
+      } catch {
+        if (zoomApplyRequest.current !== requestId) return;
+        // Browser fallback when not running in Tauri.
+        document.documentElement.style.zoom = `${zoom}%`;
+      }
+    };
+
+    void applyZoom();
   }, [zoom]);
 
   const refreshSharedState = useCallback(async () => {
