@@ -60,6 +60,7 @@ sudo apt-get install -y \
   file \
   git \
   libgtk-3-dev \
+  libasound2-dev \
   libssl-dev \
   librsvg2-dev \
   ffmpeg \
