@@ -1749,6 +1749,22 @@ export default function App() {
             toolStatus={toolStatus}
             notesDirPath={currentNotesDir}
             gitRemoteUrl={connectedGitRemote}
+            onSaveNotesDir={async (path) => {
+              const next = path.trim();
+              if (!next) return;
+              await setNotesDir(next);
+              setCurrentNotesDir(next);
+              setNotesDirPath(next);
+              await refreshSharedState();
+            }}
+            onSaveGitRemote={async (url) => {
+              const next = url.trim();
+              if (!next) return;
+              await setGitRemote(next);
+              setConnectedGitRemote(next);
+              setGitRemoteUrl("");
+              setGitBanner(false);
+            }}
             recordingDevice={recordingDevice}
             onDeviceChange={handleDeviceChange}
             onRefreshTools={async () => {

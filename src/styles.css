@@ -1643,6 +1643,58 @@ body {
   text-overflow: ellipsis;
 }
 
+.settings-inline-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-text-input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+}
+
+.settings-text-input:focus {
+  border-color: var(--accent);
+}
+
+.settings-inline-save-btn {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-family: var(--font);
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.settings-inline-save-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.settings-inline-save-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.settings-storage-error {
+  font-size: 12px;
+  color: #d44;
+  margin-top: 2px;
+}
+
 .settings-section-title {
   font-size: 14px;
   font-weight: 600;

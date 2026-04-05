@@ -19,6 +19,8 @@ interface SettingsPanelProps {
   toolStatus: ToolStatus;
   notesDirPath: string | null;
   gitRemoteUrl: string | null;
+  onSaveNotesDir: (path: string) => Promise<void>;
+  onSaveGitRemote: (url: string) => Promise<void>;
   recordingDevice: string | null;
   onDeviceChange: (device: string | null) => void;
   onRefreshTools: () => void;
@@ -94,6 +96,8 @@ export function SettingsPanel({
   toolStatus,
   notesDirPath,
   gitRemoteUrl,
+  onSaveNotesDir,
+  onSaveGitRemote,
   recordingDevice,
   onDeviceChange,
   onRefreshTools,
@@ -109,12 +113,25 @@ export function SettingsPanel({
   const [devices, setDevices] = useState<InputDeviceInfo[]>([]);
   const [pullingModel, setPullingModel] = useState<string | null>(null);
   const [installingTool, setInstallingTool] = useState<ToolKey | null>(null);
+  const [notesPathInput, setNotesPathInput] = useState(notesDirPath ?? "");
+  const [gitRemoteInput, setGitRemoteInput] = useState(gitRemoteUrl ?? "");
+  const [savingNotesPath, setSavingNotesPath] = useState(false);
+  const [savingGitRemote, setSavingGitRemote] = useState(false);
+  const [storageError, setStorageError] = useState<string | null>(null);
 
   useEffect(() => {
     listInputDevices()
       .then(setDevices)
       .catch(() => setDevices([]));
   }, []);
+
+  useEffect(() => {
+    setNotesPathInput(notesDirPath ?? "");
+  }, [notesDirPath]);
+
+  useEffect(() => {
+    setGitRemoteInput(gitRemoteUrl ?? "");
+  }, [gitRemoteUrl]);
 
   // Escape and click-outside to close
   useEffect(() => {
@@ -178,6 +195,34 @@ export function SettingsPanel({
     [onInstallTool],
   );
 
+  const handleSaveNotesPath = useCallback(async () => {
+    const nextPath = notesPathInput.trim();
+    if (!nextPath) return;
+    setStorageError(null);
+    setSavingNotesPath(true);
+    try {
+      await onSaveNotesDir(nextPath);
+    } catch (e) {
+      setStorageError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingNotesPath(false);
+    }
+  }, [notesPathInput, onSaveNotesDir]);
+
+  const handleSaveGitRemote = useCallback(async () => {
+    const nextRemote = gitRemoteInput.trim();
+    if (!nextRemote) return;
+    setStorageError(null);
+    setSavingGitRemote(true);
+    try {
+      await onSaveGitRemote(nextRemote);
+    } catch (e) {
+      setStorageError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingGitRemote(false);
+    }
+  }, [gitRemoteInput, onSaveGitRemote]);
+
   const installedOllama = ollamaModels.filter((m) => m.installed);
   const uninstalledOllama = ollamaModels.filter((m) => !m.installed);
 
@@ -189,17 +234,57 @@ export function SettingsPanel({
 
           <div className="settings-info-block">
             <div className="settings-info-label">Notes folder on disk</div>
-            <div className="settings-info-value">
-              {notesDirPath ?? "Not available"}
+            <div className="settings-inline-input-row">
+              <input
+                className="settings-text-input"
+                value={notesPathInput}
+                onChange={(e) => setNotesPathInput(e.target.value)}
+                placeholder="/path/to/notes"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleSaveNotesPath();
+                  }
+                }}
+              />
+              <button
+                className="settings-inline-save-btn"
+                disabled={savingNotesPath || notesPathInput.trim().length === 0}
+                onClick={() => void handleSaveNotesPath()}
+              >
+                {savingNotesPath ? "Saving..." : "Save"}
+              </button>
             </div>
           </div>
 
           <div className="settings-info-block">
             <div className="settings-info-label">Git remote</div>
-            <div className="settings-info-value">
-              {gitRemoteUrl ?? "Not connected"}
+            <div className="settings-inline-input-row">
+              <input
+                className="settings-text-input"
+                value={gitRemoteInput}
+                onChange={(e) => setGitRemoteInput(e.target.value)}
+                placeholder="git@github.com:user/repo.git"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleSaveGitRemote();
+                  }
+                }}
+              />
+              <button
+                className="settings-inline-save-btn"
+                disabled={savingGitRemote || gitRemoteInput.trim().length === 0}
+                onClick={() => void handleSaveGitRemote()}
+              >
+                {savingGitRemote ? "Saving..." : "Save"}
+              </button>
             </div>
           </div>
+
+          {storageError && (
+            <div className="settings-storage-error">{storageError}</div>
+          )}
         </div>
 
         <div className="settings-section">

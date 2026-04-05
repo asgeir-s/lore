@@ -72,6 +72,36 @@ Your settings (theme, zoom, git remote) are preserved between builds.
 
 To update after making changes, just run the two commands above again.
 
+## Settings
+
+Open Settings to manage **Storage & Sync**:
+
+- Notes folder on disk (editable)
+- Git remote URL (editable)
+
+Use **Save** (or press `Enter`) after editing either field.
+
+## Pending Processing (QMD)
+
+Dump can defer some note processing so edits are never blocked by background indexing/tagging.
+
+- Note saves are written immediately.
+- QMD work (auto-tags + related notes refresh) can be queued as **pending**.
+- Pending QMD work is persisted in `.dump-qmd-pending.json` inside your notes root.
+- On next app start, pending items are resumed automatically.
+
+What this means in practice:
+
+- A note may appear saved before its related notes/tags are fully refreshed.
+- You may briefly see **Getting tags & related notes** in the background jobs indicator.
+- If QMD is unavailable, note saving still works; only QMD-derived features are delayed/unavailable until QMD is back.
+
+Related runtime files in the notes root:
+
+- `.dump-index.json`: metadata index cache
+- `.dump-related.json`: related-notes cache
+- `.dump-qmd-pending.json`: deferred QMD processing queue
+
 ## Document Format
 
 Every note is a markdown file with YAML frontmatter:
@@ -95,6 +125,21 @@ Dump stores documents under a configurable root:
   notes/
   pinned/
 ```
+
+## Pinning Notes
+
+Pinning promotes a note from the regular collection into the pinned collection.
+
+- Use the pin button in the note header, or press `Cmd/Ctrl+Shift+P`.
+- Pinned notes are moved from `notes/` to `pinned/` on disk.
+- Unpinning moves the same note back to `notes/`.
+- The note ID and content stay the same; only the collection path changes.
+
+Why this exists:
+
+- `notes/` is for ongoing capture and quick iteration.
+- `pinned/` is for durable reference notes (principles, decisions, checklists, core docs).
+- The app keeps pinned and recent lists separate so high-signal notes are easy to find.
 
 ## Keyboard Shortcuts
 
