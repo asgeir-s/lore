@@ -327,7 +327,18 @@ fn save_note(
     let meta = {
         let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
         let mut index = state.index.lock().map_err(|e| e.to_string())?;
-        notes::save_note(&dir, id, &content, &tags, title, &mut index).map_err(|e| e.to_string())?
+        let save_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            notes::save_note(&dir, id, &content, &tags, title, &mut index)
+        }));
+        match save_result {
+            Ok(result) => result.map_err(|e| e.to_string())?,
+            Err(_) => {
+                return Err(
+                    "Internal error while saving note (panic caught before app crash)"
+                        .to_string(),
+                )
+            }
+        }
     };
     let git = state.git.lock().map_err(|e| e.to_string())?;
     git.notify_change(&meta.path, &meta.title, is_new);

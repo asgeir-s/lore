@@ -253,13 +253,18 @@ fn slugify(title: &str) -> String {
             }
         })
         .collect();
-    // Truncate to reasonable length
-    let slug = slug.trim_matches('_').to_string();
+    // Truncate to a reasonable length without slicing on byte boundaries.
+    let mut slug = slug.trim_matches('_').to_string();
     if slug.is_empty() {
         "untitled".to_string()
-    } else if slug.len() > 50 {
-        slug[..50].trim_end_matches('_').to_string()
     } else {
+        if slug.chars().count() > 50 {
+            slug = slug.chars().take(50).collect::<String>();
+            slug = slug.trim_end_matches('_').to_string();
+            if slug.is_empty() {
+                return "untitled".to_string();
+            }
+        }
         slug
     }
 }
@@ -1482,6 +1487,14 @@ mod tests {
         assert_eq!(slugify("My Note Title"), "my_note_title");
         assert_eq!(slugify("Hello World!"), "hello_world");
         assert_eq!(slugify(""), "untitled");
+    }
+
+    #[test]
+    fn test_slugify_unicode_long_title() {
+        let title = "å".repeat(60);
+        let slug = slugify(&title);
+        assert!(!slug.is_empty());
+        assert!(slug.chars().count() <= 50);
     }
 
     #[test]
