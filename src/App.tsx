@@ -966,8 +966,8 @@ export default function App() {
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         const editorFocused = !!document.activeElement?.closest(".cm-editor");
-        if (activePanel.isUserModified() && editorFocused) {
-          activePanel.save();
+        if (editorFocused) {
+          activePanel.save(true);
         } else {
           activePanel.openSelectedNote(true);
         }

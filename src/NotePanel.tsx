@@ -38,7 +38,7 @@ export interface PanelHandle {
   getLoadedNoteId: () => string | null;
   canGoBack: () => boolean;
   goBack: () => void;
-  save: () => Promise<void>;
+  save: (force?: boolean) => Promise<void>;
   toggleTags: () => void;
   edit: () => void;
   discardEdits: () => void;
@@ -327,16 +327,21 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       [hasUnsavedChanges, persistNote],
     );
 
-    const handleSave = useCallback(async () => {
+    const handleSave = useCallback(async (force: boolean = false) => {
       try {
-        const saved = await saveIfNeeded(false);
+        let saved = false;
+        if (force && loadedNoteIdRef.current) {
+          saved = !!(await persistNote({ allowEmpty: true }));
+        } else {
+          saved = await saveIfNeeded(false);
+        }
         if (saved && document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
         }
       } catch (e) {
         console.error("Failed to save note:", e);
       }
-    }, [saveIfNeeded]);
+    }, [persistNote, saveIfNeeded]);
 
     const handleTogglePin = useCallback(async () => {
       const noteId = loadedNoteIdRef.current;
