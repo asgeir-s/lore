@@ -100,11 +100,15 @@ function readDraft(key: string): LocalDraft | null {
     const parsed = JSON.parse(raw) as Partial<LocalDraft> | null;
     if (!parsed || parsed.version !== 1) return null;
     if (typeof parsed.sourceKey !== "string") return null;
-    if (parsed.noteId !== null && typeof parsed.noteId !== "string") return null;
+    if (parsed.noteId !== null && typeof parsed.noteId !== "string")
+      return null;
     if (typeof parsed.title !== "string") return null;
     if (typeof parsed.content !== "string") return null;
     if (!Array.isArray(parsed.tags)) return null;
-    if (typeof parsed.updatedAt !== "number" || !Number.isFinite(parsed.updatedAt)) {
+    if (
+      typeof parsed.updatedAt !== "number" ||
+      !Number.isFinite(parsed.updatedAt)
+    ) {
       return null;
     }
     const tags = parsed.tags.filter((t): t is string => typeof t === "string");
@@ -140,7 +144,9 @@ function removeDraft(key: string): void {
   }
 }
 
-function isDraftMeaningful(draft: Pick<LocalDraft, "title" | "content" | "tags">): boolean {
+function isDraftMeaningful(
+  draft: Pick<LocalDraft, "title" | "content" | "tags">,
+): boolean {
   return (
     draft.content.trim().length > 0 ||
     draft.title.trim().length > 0 ||
@@ -699,7 +705,9 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           }
 
           const own = readDraft(panelDraftKey);
-          const latest = allowGlobalDraftRestore ? readDraft(DRAFT_LATEST_KEY) : null;
+          const latest = allowGlobalDraftRestore
+            ? readDraft(DRAFT_LATEST_KEY)
+            : null;
           const candidates = [own, latest]
             .filter((draft): draft is LocalDraft => !!draft)
             .filter(isDraftFresh)
