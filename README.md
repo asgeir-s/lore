@@ -4,7 +4,7 @@ A zero-friction personal knowledge base and note capture app. Keep notes lightwe
 
 ## Philosophy
 
-Capture first, organize lightly. Most documents are notes; a small set can be promoted into pinned notes. Structure emerges from tags, links, full-text search, and a minimal `notes/` vs `pinned/` split.
+Capture first, organize lightly. Most documents are notes; a small set can be promoted into pinned notes. Structure emerges from tags, links, full-text search, and pinning. Automatic organization keeps the knowledge base usable without manual upkeep. The app is designed to be a trusted source of truth for both users and AI agents, with user-authored content and read-first AI access.
 
 ## Features
 
