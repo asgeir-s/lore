@@ -1269,7 +1269,7 @@ export default function App() {
         e.preventDefault();
         if (panels.length <= 1) return;
         if (handleRecordingPanelClose(activePanelIndex)) return;
-        if (activePanel.isUserModified() && activePanel.hasContent()) {
+        if (activePanel.hasUnsavedChanges()) {
           if (closeWarningIndex === activePanelIndex) {
             // Second press — confirm close, discard unsaved content
             if (closeWarningTimeout.current)

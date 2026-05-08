@@ -34,6 +34,7 @@ export interface PanelHandle {
   ensureRecordingNote: () => Promise<string>;
   saveIfNeeded: (deferProcessing?: boolean) => Promise<boolean>;
   isUserModified: () => boolean;
+  hasUnsavedChanges: () => boolean;
   hasContent: () => boolean;
   getLoadedNoteId: () => string | null;
   canGoBack: () => boolean;
@@ -575,6 +576,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           }
         },
         isUserModified: () => userModified,
+        hasUnsavedChanges: () => hasUnsavedChanges(true),
         hasContent: () => content.trim().length > 0,
         getLoadedNoteId: () => loadedNoteIdRef.current,
         canGoBack: () => historyRef.current.length > 0,
