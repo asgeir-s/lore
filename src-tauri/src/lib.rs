@@ -334,8 +334,7 @@ fn save_note(
             Ok(result) => result.map_err(|e| e.to_string())?,
             Err(_) => {
                 return Err(
-                    "Internal error while saving note (panic caught before app crash)"
-                        .to_string(),
+                    "Internal error while saving note (panic caught before app crash)".to_string(),
                 )
             }
         }
@@ -460,6 +459,125 @@ fn import_markdown_file(
     if let Ok(qmd) = state.qmd.lock() {
         qmd.notify_change(&meta.id, &meta.title);
     }
+    Ok(meta)
+}
+
+#[tauri::command]
+fn import_markdown_data(
+    state: State<AppState>,
+    file_name: String,
+    content: String,
+) -> Result<NoteMetadata, String> {
+    let meta = {
+        let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
+        let mut index = state.index.lock().map_err(|e| e.to_string())?;
+        notes::import_markdown_data(&dir, &content, &mut index)
+            .map_err(|e| format!("import {file_name}: {e}"))?
+    };
+    let git = state.git.lock().map_err(|e| e.to_string())?;
+    git.notify_change(&meta.path, &meta.title, true);
+    if let Ok(qmd) = state.qmd.lock() {
+        qmd.notify_change(&meta.id, &meta.title);
+    }
+    Ok(meta)
+}
+
+#[tauri::command]
+async fn import_audio_file(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    source_path: String,
+    target_note_id: Option<String>,
+    import_mode: Option<String>,
+    title: Option<String>,
+    tags: Option<Vec<String>>,
+) -> Result<NoteMetadata, String> {
+    let note_id = target_note_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let import_mode = recording::AudioImportMode::from_arg(import_mode.as_deref())?;
+    let (notes_dir, summary_model, whisper_model) = {
+        let dir = state.notes_dir.lock().map_err(|e| e.to_string())?.clone();
+        let models = state.model_settings.lock().map_err(|e| e.to_string())?;
+        (
+            dir,
+            models.summary_model.clone(),
+            models.whisper_model.clone(),
+        )
+    };
+
+    recording::import_audio_file(
+        &app_handle,
+        &notes_dir,
+        Path::new(&source_path),
+        &note_id,
+        import_mode,
+        recording::AudioImportMetadata {
+            title,
+            tags: tags.unwrap_or_default(),
+        },
+        summary_model.as_deref(),
+        whisper_model.as_deref(),
+    )
+    .await?;
+
+    imported_audio_meta(&state, &note_id)
+}
+
+#[tauri::command]
+async fn import_audio_data(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    file_name: String,
+    data: Vec<u8>,
+    target_note_id: Option<String>,
+    import_mode: Option<String>,
+    title: Option<String>,
+    tags: Option<Vec<String>>,
+) -> Result<NoteMetadata, String> {
+    let note_id = target_note_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let import_mode = recording::AudioImportMode::from_arg(import_mode.as_deref())?;
+    let (notes_dir, summary_model, whisper_model) = {
+        let dir = state.notes_dir.lock().map_err(|e| e.to_string())?.clone();
+        let models = state.model_settings.lock().map_err(|e| e.to_string())?;
+        (
+            dir,
+            models.summary_model.clone(),
+            models.whisper_model.clone(),
+        )
+    };
+
+    recording::import_audio_data(
+        &app_handle,
+        &notes_dir,
+        &file_name,
+        data,
+        &note_id,
+        import_mode,
+        recording::AudioImportMetadata {
+            title,
+            tags: tags.unwrap_or_default(),
+        },
+        summary_model.as_deref(),
+        whisper_model.as_deref(),
+    )
+    .await?;
+
+    imported_audio_meta(&state, &note_id)
+}
+
+fn imported_audio_meta(state: &AppState, note_id: &str) -> Result<NoteMetadata, String> {
+    let meta = {
+        let index = state.index.lock().map_err(|e| e.to_string())?;
+        index
+            .notes
+            .get(note_id)
+            .cloned()
+            .ok_or_else(|| "Imported audio did not create a note".to_string())?
+    };
+
+    if let Ok(qmd) = state.qmd.lock() {
+        qmd.notify_change(&meta.id, &meta.title);
+    }
+
     Ok(meta)
 }
 
@@ -873,6 +991,9 @@ pub fn run() {
             get_all_tags,
             toggle_pin,
             import_markdown_file,
+            import_markdown_data,
+            import_audio_file,
+            import_audio_data,
             git_sync::get_git_remote,
             git_sync::set_git_remote,
             git_sync::dismiss_git_setup,

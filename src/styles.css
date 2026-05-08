@@ -946,10 +946,142 @@ body {
 .drop-zone-content {
   padding: 24px 48px;
   border: 2px dashed var(--accent);
-  border-radius: 16px;
+  border-radius: 8px;
   font-size: 18px;
   font-weight: 500;
   color: var(--accent);
+}
+
+.drop-zone-grid {
+  width: min(760px, calc(100vw - 48px));
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.drop-zone-card {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 92%, var(--accent));
+  color: var(--text);
+}
+
+.drop-zone-card.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--bg) 82%, var(--accent));
+  color: var(--accent);
+}
+
+.drop-zone-title {
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.drop-zone-subtitle {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+@media (max-width: 640px) {
+  .drop-zone-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .drop-zone-card {
+    min-height: 140px;
+  }
+}
+
+/* Audio import prompt */
+.audio-import-prompt-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 360;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.audio-import-prompt {
+  width: min(440px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
+}
+
+.audio-import-prompt-heading {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.audio-import-prompt-source {
+  margin-top: -8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-import-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.audio-import-title-input {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.audio-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.audio-import-btn {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.audio-import-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.audio-import-btn.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.audio-import-btn.primary:hover {
+  color: var(--bg);
 }
 
 /* Import toast */

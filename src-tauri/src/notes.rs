@@ -527,6 +527,59 @@ pub fn append_meeting_data(
     Ok(updated)
 }
 
+pub fn append_plain_transcript(
+    notes_dir: &str,
+    id: &str,
+    transcript: &str,
+    index: &mut NoteIndex,
+) -> io::Result<NoteMetadata> {
+    let meta = index
+        .notes
+        .get(id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?
+        .clone();
+
+    let file_path = note_abspath(notes_dir, &meta.path);
+    let raw = fs::read_to_string(&file_path)?;
+    let (raw_yaml, body) = parse_raw_yaml(&raw);
+    let transcript = transcript.trim();
+    let trimmed = body.trim_end();
+    let content = if trimmed.is_empty() {
+        format!("{transcript}\n")
+    } else if transcript.is_empty() {
+        format!("{trimmed}\n")
+    } else {
+        format!("{trimmed}\n\n{transcript}\n")
+    };
+
+    let title = if body.trim().is_empty() || meta.title == "Untitled" {
+        extract_title(&content)
+    } else {
+        meta.title.clone()
+    };
+    let modified = Local::now().to_rfc3339();
+    let frontmatter = build_frontmatter(
+        &meta.id,
+        &meta.created,
+        &modified,
+        &meta.tags,
+        Some(&title),
+        raw_yaml.as_ref(),
+    );
+    let full_content = format!("{frontmatter}{content}");
+    fs::write(&file_path, full_content)?;
+
+    let updated = NoteMetadata {
+        title,
+        modified,
+        ..meta
+    };
+    index.notes.insert(id.to_string(), updated.clone());
+    save_index(notes_dir, index)?;
+
+    Ok(updated)
+}
+
 /// Extract the transcript text from a meeting note.
 pub fn get_note_transcript(notes_dir: &str, id: &str, index: &NoteIndex) -> io::Result<String> {
     let meta = index
@@ -632,7 +685,7 @@ fn write_meeting_section(
     Ok(updated)
 }
 
-/// Set auto-generated tags on a note that currently has no tags.
+/// Set auto-generated tags on a note, merging them for notes that keep source tags.
 /// When `force` is true, overwrite existing tags (used by regenerate).
 /// Returns Some(updated metadata) if tags were applied, None if skipped.
 pub fn set_auto_tags(
@@ -652,20 +705,25 @@ pub fn set_auto_tags(
     }
 
     let is_meeting_note = meta.tags.iter().any(|t| t == "meeting") || is_meeting_path(&meta.path);
+    let is_voice_memo_note = meta.tags.iter().any(|t| t == "voice-memo");
+    let should_merge_auto_tags = is_meeting_note || is_voice_memo_note;
 
     // Normal flow:
     // - For regular notes, only auto-tag when empty.
-    // - For meeting notes, merge generated tags into existing tags.
+    // - For meeting and voice memo notes, merge generated tags into existing tags.
     // - For forced regenerate, replace tags.
     let next_tags = if force {
         let mut next = tags.to_vec();
         if is_meeting_note && !next.iter().any(|t| t == "meeting") {
             next.push("meeting".to_string());
         }
+        if is_voice_memo_note && !next.iter().any(|t| t == "voice-memo") {
+            next.push("voice-memo".to_string());
+        }
         next
     } else if meta.tags.is_empty() {
         tags.to_vec()
-    } else if is_meeting_note {
+    } else if should_merge_auto_tags {
         let mut merged = meta.tags.clone();
         for tag in tags {
             if !merged.iter().any(|t| t == tag) {
@@ -1271,9 +1329,17 @@ pub fn import_markdown_file(
     index: &mut NoteIndex,
 ) -> io::Result<NoteMetadata> {
     let raw = fs::read_to_string(source_path)?;
+    import_markdown_data(notes_dir, &raw, index)
+}
+
+pub fn import_markdown_data(
+    notes_dir: &str,
+    raw: &str,
+    index: &mut NoteIndex,
+) -> io::Result<NoteMetadata> {
     let now: DateTime<Local> = Local::now();
 
-    let (raw_yaml, body) = parse_raw_yaml(&raw);
+    let (raw_yaml, body) = parse_raw_yaml(raw);
 
     let (extra, body) = if let Some(yaml) = raw_yaml {
         // File has YAML frontmatter — preserve all fields
@@ -1793,6 +1859,36 @@ mod tests {
 
         assert_eq!(pinned_notes.len(), 1);
         assert!(is_pinned_path(&pinned_notes[0].path));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_auto_tags_merge_into_voice_memo_notes() {
+        let dir = setup_test_dir();
+        let mut index = NoteIndex::default();
+
+        let meta = save_note(
+            &dir,
+            None,
+            "# Voice memo\n\nDiscussed launch and budget.",
+            &["voice-memo".to_string(), "manual".to_string()],
+            None,
+            &mut index,
+        )
+        .unwrap();
+
+        let updated = set_auto_tags(
+            &dir,
+            &meta.id,
+            &["launch".to_string(), "manual".to_string()],
+            &mut index,
+            false,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(updated.tags, vec!["voice-memo", "manual", "launch"]);
 
         fs::remove_dir_all(&dir).ok();
     }

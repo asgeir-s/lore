@@ -34,6 +34,7 @@ struct RecordingCompletePayload {
     note_id: String,
     summary: Option<String>,
     transcript: Option<String>,
+    output: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -66,6 +67,42 @@ pub struct RecordingJob {
     pub transcript: Option<String>,
     pub summary: Option<String>,
     pub created_at: String,
+    pub source_title: Option<String>,
+    pub source_kind: Option<String>,
+    pub output_mode: Option<String>,
+    #[serde(default)]
+    pub import_title: Option<String>,
+    #[serde(default)]
+    pub import_tags: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AudioImportMetadata {
+    pub title: Option<String>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioImportMode {
+    RecordingNote,
+    PlainNote,
+}
+
+impl AudioImportMode {
+    pub fn from_arg(value: Option<&str>) -> Result<Self, String> {
+        match value.unwrap_or("recording-note") {
+            "recording-note" => Ok(Self::RecordingNote),
+            "plain-note" => Ok(Self::PlainNote),
+            other => Err(format!("Unsupported audio import mode: {other}")),
+        }
+    }
+
+    fn as_job_value(self) -> &'static str {
+        match self {
+            Self::RecordingNote => "recording-note",
+            Self::PlainNote => "plain-note",
+        }
+    }
 }
 
 impl RecordingJob {
@@ -273,6 +310,11 @@ async fn run_worker(
                     transcript: None,
                     summary: None,
                     created_at: chrono::Local::now().to_rfc3339(),
+                    source_title: None,
+                    source_kind: None,
+                    output_mode: None,
+                    import_title: None,
+                    import_tags: Vec::new(),
                 };
                 if let Err(e) = job.save() {
                     eprintln!("recording: failed to save job file: {e}");
@@ -823,6 +865,230 @@ fn record_device_inner(
 
 // ── Processing pipeline ─────────────────────────────────────────────
 
+pub async fn import_audio_file(
+    app_handle: &tauri::AppHandle,
+    notes_dir: &str,
+    source_path: &Path,
+    note_id: &str,
+    import_mode: AudioImportMode,
+    import_metadata: AudioImportMetadata,
+    summary_model_override: Option<&str>,
+    whisper_model_override: Option<&str>,
+) -> Result<(), String> {
+    if !source_path.is_file() {
+        return Err(format!("Audio file not found: {}", source_path.display()));
+    }
+
+    import_audio_source(
+        app_handle,
+        notes_dir,
+        source_path,
+        note_id,
+        source_title_from_path(source_path),
+        import_mode,
+        import_metadata,
+        false,
+        summary_model_override,
+        whisper_model_override,
+    )
+    .await
+}
+
+pub async fn import_audio_data(
+    app_handle: &tauri::AppHandle,
+    notes_dir: &str,
+    file_name: &str,
+    data: Vec<u8>,
+    note_id: &str,
+    import_mode: AudioImportMode,
+    import_metadata: AudioImportMetadata,
+    summary_model_override: Option<&str>,
+    whisper_model_override: Option<&str>,
+) -> Result<(), String> {
+    if data.is_empty() {
+        return Err("Audio file is empty".to_string());
+    }
+
+    let audio_dir = crate::notes::meeting_audio_dir(notes_dir);
+    std::fs::create_dir_all(&audio_dir)
+        .map_err(|e| format!("create audio directory {}: {e}", audio_dir.display()))?;
+
+    let source_path = audio_dir.join(format!("{note_id}_source{}", safe_extension(file_name)));
+    std::fs::write(&source_path, data)
+        .map_err(|e| format!("write dropped audio {}: {e}", source_path.display()))?;
+
+    let result = import_audio_source(
+        app_handle,
+        notes_dir,
+        &source_path,
+        note_id,
+        source_title_from_name(file_name),
+        import_mode,
+        import_metadata,
+        true,
+        summary_model_override,
+        whisper_model_override,
+    )
+    .await;
+    let _ = std::fs::remove_file(&source_path);
+    result
+}
+
+async fn import_audio_source(
+    app_handle: &tauri::AppHandle,
+    notes_dir: &str,
+    source_path: &Path,
+    note_id: &str,
+    source_title: Option<String>,
+    import_mode: AudioImportMode,
+    import_metadata: AudioImportMetadata,
+    remove_source_after_convert: bool,
+    summary_model_override: Option<&str>,
+    whisper_model_override: Option<&str>,
+) -> Result<(), String> {
+    let audio_dir = crate::notes::meeting_audio_dir(notes_dir);
+    std::fs::create_dir_all(&audio_dir)
+        .map_err(|e| format!("create audio directory {}: {e}", audio_dir.display()))?;
+
+    let final_wav = audio_dir.join(format!("{note_id}.wav"));
+    emit_progress(app_handle, note_id, "importing", "Preparing audio...");
+
+    if let Err(e) = convert_mono(source_path, &final_wav).await {
+        if remove_source_after_convert {
+            let _ = std::fs::remove_file(source_path);
+        }
+        let message = format!("Audio import failed: {e}");
+        let _ = app_handle.emit("recording-error", &message);
+        return Err(message);
+    }
+
+    if remove_source_after_convert {
+        let _ = std::fs::remove_file(source_path);
+    }
+
+    let mut job = RecordingJob {
+        note_id: note_id.to_string(),
+        stage: JobStage::Transcribing,
+        notes_dir: notes_dir.to_string(),
+        mic_path: String::new(),
+        system_path: String::new(),
+        final_wav_path: final_wav.to_string_lossy().to_string(),
+        has_system: false,
+        transcript: None,
+        summary: None,
+        created_at: chrono::Local::now().to_rfc3339(),
+        source_title,
+        source_kind: Some("voice-memo".to_string()),
+        output_mode: Some(import_mode.as_job_value().to_string()),
+        import_title: clean_import_title(import_metadata.title),
+        import_tags: clean_import_tags(import_metadata.tags),
+    };
+    if let Err(e) = job.save() {
+        eprintln!("recording: failed to save imported audio job: {e}");
+    }
+
+    process_recording(
+        app_handle,
+        &mut job,
+        summary_model_override,
+        whisper_model_override,
+    )
+    .await;
+
+    Ok(())
+}
+
+fn safe_extension(file_name: &str) -> String {
+    let Some(ext) = Path::new(file_name).extension().and_then(|e| e.to_str()) else {
+        return String::new();
+    };
+    if ext.len() > 12 || !ext.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return String::new();
+    }
+    format!(".{}", ext.to_lowercase())
+}
+
+fn source_title_from_path(path: &Path) -> Option<String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .and_then(source_title_from_name)
+}
+
+fn source_title_from_name(file_name: &str) -> Option<String> {
+    let stem = Path::new(file_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(file_name)
+        .replace(['_', '\n', '\r'], " ");
+    let title = stem.trim();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title.to_string())
+    }
+}
+
+fn clean_import_title(title: Option<String>) -> Option<String> {
+    title
+        .map(|title| title.trim().to_string())
+        .filter(|title| !title.is_empty())
+}
+
+fn clean_tag(tag: &str) -> Option<String> {
+    let tag = tag.trim().trim_start_matches('#').trim().to_lowercase();
+    if tag.is_empty() {
+        None
+    } else {
+        Some(tag)
+    }
+}
+
+fn clean_import_tags(tags: Vec<String>) -> Vec<String> {
+    let mut result = Vec::new();
+    for tag in tags {
+        let Some(tag) = clean_tag(&tag) else {
+            continue;
+        };
+        if !result.contains(&tag) {
+            result.push(tag);
+        }
+    }
+    result
+}
+
+fn merge_tags(autogenerated: &[&str], extra: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    for tag in autogenerated {
+        let Some(tag) = clean_tag(tag) else {
+            continue;
+        };
+        if !result.contains(&tag) {
+            result.push(tag);
+        }
+    }
+    for tag in extra {
+        let Some(tag) = clean_tag(tag) else {
+            continue;
+        };
+        if !result.contains(&tag) {
+            result.push(tag);
+        }
+    }
+    result
+}
+
+fn voice_memo_tags(extra: &[String]) -> Vec<String> {
+    merge_tags(&["voice-memo"], extra)
+}
+
+fn yaml_list_lines(values: &[String]) -> String {
+    serde_yaml::to_string(values)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| format!("  {line}\n"))
+        .collect()
+}
+
 async fn process_recording(
     app_handle: &tauri::AppHandle,
     job: &mut RecordingJob,
@@ -916,9 +1182,15 @@ async fn process_recording(
     }
 
     let transcript_text = job.transcript.clone().unwrap_or_default();
+    let plain_note_output = job.output_mode.as_deref() == Some("plain-note");
+
+    if plain_note_output {
+        job.stage = JobStage::Saving;
+        let _ = job.save();
+    }
 
     // Step 3: Summarize (skip if already past this stage)
-    if job.stage <= JobStage::Summarizing {
+    if !plain_note_output && job.stage <= JobStage::Summarizing {
         if job.summary.is_some() {
             eprintln!("recording: summary already available, skipping");
         } else {
@@ -943,7 +1215,41 @@ async fn process_recording(
 
     let summary = job.summary.clone().unwrap_or_default();
 
-    // Step 4: Create meeting note or emit data for existing note
+    if plain_note_output {
+        emit_progress(
+            app_handle,
+            &job.note_id,
+            "saving",
+            "Saving transcription...",
+        );
+        if let Err(e) = save_plain_transcript_note(
+            app_handle,
+            &job.notes_dir,
+            &job.note_id,
+            &transcript_text,
+            job.import_title.as_deref(),
+            &job.import_tags,
+        )
+        .await
+        {
+            let _ = app_handle.emit("recording-error", e);
+            job.delete();
+            return;
+        }
+        job.delete();
+        let _ = app_handle.emit(
+            "recording-complete",
+            RecordingCompletePayload {
+                note_id: job.note_id.clone(),
+                summary: None,
+                transcript: None,
+                output: Some("plain-note".to_string()),
+            },
+        );
+        return;
+    }
+
+    // Step 4: Create a recording note or emit data for an existing note
     let note_exists = app_handle
         .try_state::<AppState>()
         .and_then(|state| {
@@ -965,22 +1271,31 @@ async fn process_recording(
                 note_id: job.note_id.clone(),
                 summary: Some(summary),
                 transcript: Some(transcript_text),
+                output: None,
             },
         );
     } else {
-        // No existing note — create a new meeting note
+        // No existing note — create a new recording note
+        let imported_voice_memo = job.source_kind.as_deref() == Some("voice-memo");
         emit_progress(
             app_handle,
             &job.note_id,
             "saving",
-            "Creating meeting note...",
+            if imported_voice_memo {
+                "Creating voice memo note..."
+            } else {
+                "Creating meeting note..."
+            },
         );
-        create_meeting_note(
+        create_recording_note(
             app_handle,
             &job.notes_dir,
             &job.note_id,
             &summary,
             &transcript_text,
+            job.import_title.as_deref().or(job.source_title.as_deref()),
+            job.source_kind.as_deref(),
+            &job.import_tags,
         )
         .await;
         job.delete();
@@ -990,6 +1305,7 @@ async fn process_recording(
                 note_id: job.note_id.clone(),
                 summary: None,
                 transcript: None,
+                output: job.output_mode.clone(),
             },
         );
     }
@@ -1004,6 +1320,67 @@ fn emit_progress(app_handle: &tauri::AppHandle, note_id: &str, stage: &str, deta
             detail: detail.to_string(),
         },
     );
+}
+
+async fn save_plain_transcript_note(
+    app_handle: &tauri::AppHandle,
+    notes_dir: &str,
+    note_id: &str,
+    transcript: &str,
+    title_override: Option<&str>,
+    import_tags: &[String],
+) -> Result<(), String> {
+    let content = transcript_without_timestamps(transcript);
+    let state = app_handle
+        .try_state::<AppState>()
+        .ok_or_else(|| "App state unavailable while saving transcription".to_string())?;
+
+    let (meta, is_new) = {
+        let mut index = state.index.lock().map_err(|e| e.to_string())?;
+        let is_new = !index.notes.contains_key(note_id);
+        let meta = if is_new {
+            crate::notes::save_note(
+                notes_dir,
+                Some(note_id.to_string()),
+                &content,
+                &voice_memo_tags(import_tags),
+                title_override.map(ToOwned::to_owned),
+                &mut index,
+            )
+            .map_err(|e| format!("save transcription note: {e}"))?
+        } else {
+            crate::notes::append_plain_transcript(notes_dir, note_id, &content, &mut index)
+                .map_err(|e| format!("append transcription to note: {e}"))?
+        };
+        (meta, is_new)
+    };
+
+    if let Ok(git) = state.git.lock() {
+        git.notify_change(&meta.path, &meta.title, is_new);
+    }
+    if let Ok(qmd) = state.qmd.lock() {
+        qmd.notify_change(&meta.id, &meta.title);
+    }
+    let _ = app_handle.emit("notes-changed", ());
+
+    Ok(())
+}
+
+fn transcript_without_timestamps(transcript: &str) -> String {
+    transcript
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix('[').and_then(|s| s.split_once(']')) {
+                rest.1.trim_start().to_string()
+            } else {
+                trimmed.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 async fn mix_audio(mic: &Path, system: &Path, output: &Path) -> Result<(), String> {
@@ -1419,12 +1796,12 @@ pub async fn summarize(
 
     let prompt = if is_norwegian {
         format!(
-            "Oppsummer dette møtetranskriptet med hovedpunkter, beslutninger og oppgaver. Bruk markdown-formatering. Skriv kun på norsk.\n\n{}",
+            "Oppsummer dette transkriptet med hovedpunkter, beslutninger og oppgaver. Bruk markdown-formatering. Skriv kun på norsk.\n\n{}",
             transcript
         )
     } else {
         format!(
-            "Summarize this meeting transcript into key points, decisions, and action items. Use markdown formatting.\n\n{}",
+            "Summarize this transcript into key points, decisions, and action items. Use markdown formatting.\n\n{}",
             transcript
         )
     };
@@ -1452,25 +1829,49 @@ pub async fn summarize(
 
 // ── Note creation ───────────────────────────────────────────────────
 
-async fn create_meeting_note(
+async fn create_recording_note(
     app_handle: &tauri::AppHandle,
     notes_dir: &str,
     note_id: &str,
     summary: &str,
     transcript: &str,
+    title_override: Option<&str>,
+    source_kind: Option<&str>,
+    import_tags: &[String],
 ) {
     let now = chrono::Local::now();
     let timestamp = now.format("%Y%m%d%H%M%S").to_string();
     let date_display = now.format("%Y-%m-%d %H:%M").to_string();
     let created = now.to_rfc3339();
 
+    let imported_voice_memo = source_kind == Some("voice-memo");
+    let fallback_title = if imported_voice_memo {
+        format!("Voice Memo {date_display}")
+    } else {
+        format!("Meeting {date_display}")
+    };
+    let title = title_override
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or(fallback_title);
+    let note_type = if imported_voice_memo {
+        "voice-memo"
+    } else {
+        "meeting"
+    };
+    let tags = if imported_voice_memo {
+        voice_memo_tags(import_tags)
+    } else {
+        merge_tags(&["meeting"], import_tags)
+    };
+    let tag_lines = yaml_list_lines(&tags);
+
     let frontmatter = format!(
-        "---\nid: {note_id}\ncreated: {created}\nmodified: {created}\ntags:\n  - meeting\ntype: meeting\naudio_path: notes/meetings/.audio/{note_id}.wav\n---\n"
+        "---\nid: {note_id}\ncreated: {created}\nmodified: {created}\ntags:\n{tag_lines}type: {note_type}\naudio_path: notes/meetings/.audio/{note_id}.wav\n---\n"
     );
 
-    let body = format!(
-        "# Meeting {date_display}\n\n## Summary\n\n{summary}\n\n## Transcript\n\n{transcript}\n"
-    );
+    let body = format!("# {title}\n\n## Summary\n\n{summary}\n\n## Transcript\n\n{transcript}\n");
 
     let full_content = format!("{frontmatter}{body}");
 
@@ -1478,15 +1879,25 @@ async fn create_meeting_note(
     let meetings_dir = crate::notes::meetings_dir(notes_dir);
     let _ = std::fs::create_dir_all(&meetings_dir);
 
-    let filename = format!("{timestamp}-meeting.md");
-    let file_path = meetings_dir.join(&filename);
+    let filename_kind = if imported_voice_memo {
+        "voice-memo"
+    } else {
+        "meeting"
+    };
+    let mut filename = format!("{timestamp}-{filename_kind}.md");
+    let mut file_path = meetings_dir.join(&filename);
+    if file_path.exists() {
+        let short_id = note_id.chars().take(8).collect::<String>();
+        filename = format!("{timestamp}-{short_id}-{filename_kind}.md");
+        file_path = meetings_dir.join(&filename);
+    }
     let rel_path = format!("notes/meetings/{filename}");
 
     if let Err(e) = std::fs::write(&file_path, &full_content) {
-        eprintln!("recording: failed to write meeting note: {e}");
+        eprintln!("recording: failed to write recording note: {e}");
         let _ = app_handle.emit(
             "recording-error",
-            format!("Failed to write meeting note: {e}"),
+            format!("Failed to write recording note: {e}"),
         );
         return;
     }
@@ -1496,10 +1907,10 @@ async fn create_meeting_note(
         let meta = crate::notes::NoteMetadata {
             id: note_id.to_string(),
             path: rel_path.clone(),
-            title: format!("Meeting {date_display}"),
+            title: title.clone(),
             created: created.clone(),
             modified: created,
-            tags: vec!["meeting".to_string()],
+            tags: tags.clone(),
         };
 
         if let Ok(mut index) = state.index.lock() {
@@ -1513,7 +1924,7 @@ async fn create_meeting_note(
 
         // Notify git.
         if let Ok(git) = state.git.lock() {
-            git.notify_change(&rel_path, &format!("Meeting {date_display}"), true);
+            git.notify_change(&rel_path, &title, true);
         }
     }
 
@@ -1620,6 +2031,7 @@ async fn create_error_note(
             note_id: note_id.to_string(),
             summary: None,
             transcript: None,
+            output: None,
         },
     );
 }
@@ -1675,5 +2087,24 @@ mod tests {
         let lines = parsed.lines().collect::<Vec<_>>();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0], "[00:03] This sentence repeated at same time.");
+    }
+
+    #[test]
+    fn transcript_without_timestamps_removes_segment_prefixes() {
+        let plain = transcript_without_timestamps("[00:00] First bit\n[01:12] Second bit");
+        assert_eq!(plain, "First bit\nSecond bit");
+    }
+
+    #[test]
+    fn merge_tags_keeps_autogenerated_tags_first() {
+        let tags = merge_tags(
+            &["voice-memo"],
+            &[
+                "Project".to_string(),
+                " voice-memo ".to_string(),
+                "#Follow-up".to_string(),
+            ],
+        );
+        assert_eq!(tags, vec!["voice-memo", "project", "follow-up"]);
     }
 }

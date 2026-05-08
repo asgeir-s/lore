@@ -189,6 +189,8 @@ Record meetings directly in the app, then get an auto-generated note with a summ
 
 Meeting notes live in `notes/meetings/`. Audio files are in `notes/meetings/.audio/` (git-ignored).
 
+You can also drag audio files, including `.m4a` recordings from Apple Voice Memos, directly into Lore. Drop audio on the Meetings target for the Summary/Transcript workflow, or on the Notes target for a plain transcription without timestamps. Before import starts, you can add a title and tags or skip that step to keep the automatic title/tags.
+
 **Required:** `ffmpeg`, `whisper-cpp` (install via setup script)
 **Optional:** `ollama` with a model (for AI summaries — without it you still get the transcript)
 

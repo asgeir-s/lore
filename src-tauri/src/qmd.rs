@@ -699,10 +699,10 @@ fn build_maps(
 }
 
 /// Build a search query for finding related notes.
-/// If the note already has tags, uses them directly (no ollama call).
+/// If an ordinary note already has tags, uses them directly (no ollama call).
 /// Otherwise asks ollama to extract keywords from content.
 /// Returns (query_string, parsed_keywords) — keywords are only Some when ollama was called
-/// (used for auto-tagging notes that have no tags).
+/// (used for auto-tagging empty-tag, meeting, and voice memo notes).
 async fn build_query(
     dir: &Path,
     title: &str,
@@ -711,12 +711,15 @@ async fn build_query(
     has_ollama: bool,
     ollama_model: &str,
 ) -> (String, Option<Vec<String>>) {
-    let is_meeting_note = tags.iter().any(|t| t.as_str() == "meeting");
+    let is_meeting_note = tags.iter().any(|t| t.as_str() == "meeting")
+        || rel_path.is_some_and(|path| crate::notes::is_meeting_path(path));
+    let is_voice_memo_note = tags.iter().any(|t| t.as_str() == "voice-memo");
+    let should_extract_keywords = is_meeting_note || is_voice_memo_note;
 
-    // For non-meeting notes, existing tags are enough and we skip ollama extraction.
-    // For meeting notes, we still extract keywords so they can be appended as topic tags,
-    // even if the user already added some tags manually while processing.
-    if !is_meeting_note && !tags.is_empty() {
+    // For ordinary notes, existing tags are enough and we skip ollama extraction.
+    // For meetings and imported voice memos, still extract keywords so they can be
+    // appended as topic tags even when the user already added tags manually.
+    if !should_extract_keywords && !tags.is_empty() {
         let tag_str = tags.join(", ");
         return (tag_str, None);
     }

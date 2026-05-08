@@ -240,6 +240,54 @@ export async function importMarkdownFile(
   throw new Error("Import is only available in the desktop app");
 }
 
+export async function importMarkdownData(
+  fileName: string,
+  content: string,
+): Promise<NoteMetadata> {
+  if (isTauri()) {
+    return invoke<NoteMetadata>("import_markdown_data", { fileName, content });
+  }
+  throw new Error("Import is only available in the desktop app");
+}
+
+export interface AudioImportOptions {
+  importMode?: "recording-note" | "plain-note";
+  title?: string;
+  tags?: string[];
+}
+
+export async function importAudioFile(
+  sourcePath: string,
+  options: AudioImportOptions = {},
+): Promise<NoteMetadata> {
+  if (isTauri()) {
+    return invoke<NoteMetadata>("import_audio_file", {
+      sourcePath,
+      importMode: options.importMode ?? null,
+      title: options.title ?? null,
+      tags: options.tags ?? null,
+    });
+  }
+  throw new Error("Audio import is only available in the desktop app");
+}
+
+export async function importAudioData(
+  fileName: string,
+  data: Uint8Array,
+  options: AudioImportOptions = {},
+): Promise<NoteMetadata> {
+  if (isTauri()) {
+    return invoke<NoteMetadata>("import_audio_data", {
+      fileName,
+      data: Array.from(data),
+      importMode: options.importMode ?? null,
+      title: options.title ?? null,
+      tags: options.tags ?? null,
+    });
+  }
+  throw new Error("Audio import is only available in the desktop app");
+}
+
 export async function rebuildIndex(): Promise<void> {
   if (isTauri()) {
     return invoke<void>("rebuild_index");

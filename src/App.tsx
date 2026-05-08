@@ -8,7 +8,10 @@ import {
   listPinnedNotes,
   getAllTags,
   rebuildIndex,
+  importMarkdownData,
   importMarkdownFile,
+  importAudioFile,
+  importAudioData,
   getGitRemote,
   setGitRemote,
   dismissGitSetup,
@@ -28,6 +31,7 @@ import {
 } from "./api";
 import type { RecordingState } from "./api";
 import type {
+  AudioImportOptions,
   ToolStatus,
   ModelSettings,
   OllamaModelInfo,
@@ -41,12 +45,23 @@ import { SettingsPanel } from "./SettingsPanel";
 import type { PullProgress } from "./SettingsPanel";
 import { BackgroundJobsIndicator } from "./BackgroundJobs";
 import type { BgJob } from "./BackgroundJobs";
+import { TagInput } from "./TagInput";
+import type { TagInputHandle } from "./TagInput";
 
 interface PanelState {
   id: string;
   initialNoteId?: string;
   independent?: boolean;
 }
+
+type AudioImportMode = "recording-note" | "plain-note";
+
+type DropZoneMode = "generic" | "audio";
+
+type AudioImportMetadata = {
+  title?: string;
+  tags?: string[];
+};
 
 let nextPanelId = 1;
 function genPanelId() {
@@ -55,12 +70,163 @@ function genPanelId() {
 
 const firstPanelId = genPanelId();
 const NOTES_DIR_PROMPT_KEY = "notes-dir-prompted-v1";
+const AUDIO_IMPORT_EXTENSIONS = new Set([
+  ".aac",
+  ".aif",
+  ".aiff",
+  ".caf",
+  ".flac",
+  ".m4a",
+  ".m4b",
+  ".m4p",
+  ".mov",
+  ".mp3",
+  ".mp4",
+  ".ogg",
+  ".opus",
+  ".wav",
+  ".webm",
+]);
+
+function lowerExtension(name: string): string {
+  const cleanName = name.split(/[?#]/, 1)[0];
+  const dotIndex = cleanName.lastIndexOf(".");
+  return dotIndex === -1 ? "" : cleanName.slice(dotIndex).toLowerCase();
+}
+
+function isMarkdownImportPath(path: string): boolean {
+  return lowerExtension(path) === ".md";
+}
+
+function isMarkdownImportName(name: string, mimeType?: string): boolean {
+  return (
+    lowerExtension(name) === ".md" ||
+    mimeType?.toLowerCase() === "text/markdown"
+  );
+}
+
+function isAudioImportName(name: string, mimeType?: string): boolean {
+  return (
+    AUDIO_IMPORT_EXTENSIONS.has(lowerExtension(name)) ||
+    !!mimeType?.toLowerCase().startsWith("audio/")
+  );
+}
+
+function isAudioImportPath(path: string): boolean {
+  return isAudioImportName(path);
+}
+
+function isImportablePath(path: string): boolean {
+  return isMarkdownImportPath(path) || isAudioImportPath(path);
+}
+
+function isPotentialFileDragType(type: string): boolean {
+  const lowerType = type.toLowerCase();
+  return (
+    lowerType === "files" ||
+    lowerType === "text/uri-list" ||
+    lowerType === "public.file-url" ||
+    lowerType.includes("promised-file") ||
+    lowerType.includes("audio") ||
+    lowerType.includes("mpeg-4") ||
+    lowerType.includes("quicktime")
+  );
+}
+
+function pathFromDroppedText(value: string): string | null {
+  const text = value.trim();
+  if (!text || text.startsWith("#")) return null;
+  if (text.startsWith("file://")) {
+    try {
+      return decodeURIComponent(new URL(text).pathname);
+    } catch {
+      return null;
+    }
+  }
+  return text.startsWith("/") ? text : null;
+}
+
+function importablePathsFromDataTransfer(dataTransfer: DataTransfer): string[] {
+  const values = [
+    dataTransfer.getData("text/uri-list"),
+    dataTransfer.getData("text/plain"),
+  ];
+  const paths = values
+    .flatMap((value) => value.split(/\r?\n/))
+    .map(pathFromDroppedText)
+    .filter((path): path is string => !!path && isImportablePath(path));
+  return Array.from(new Set(paths));
+}
+
+function hasImportableDataTransfer(dataTransfer: DataTransfer | null): boolean {
+  if (!dataTransfer) return false;
+  const types = Array.from(dataTransfer.types ?? []);
+  if (types.some(isPotentialFileDragType)) return true;
+  const items = Array.from(dataTransfer.items ?? []);
+  if (items.some((item) => item.kind === "file")) {
+    return true;
+  }
+  if (items.some((item) => isPotentialFileDragType(item.type))) return true;
+  return Array.from(dataTransfer.files ?? []).some(
+    (file) =>
+      isMarkdownImportName(file.name, file.type) ||
+      isAudioImportName(file.name, file.type),
+  );
+}
+
+function shouldShowAudioDropChoices(
+  dataTransfer: DataTransfer | null,
+): boolean {
+  if (!dataTransfer) return false;
+  const files = Array.from(dataTransfer.files ?? []);
+  if (files.length > 0) return files.some(isAudioImportFile);
+  const types = Array.from(dataTransfer.types ?? []);
+  if (types.some(isPotentialFileDragType)) return true;
+  const items = Array.from(dataTransfer.items ?? []);
+  if (items.some((item) => item.kind === "file")) return true;
+  return false;
+}
 
 function isMacOS(): boolean {
   if (typeof navigator === "undefined") return false;
   return /Mac|iPhone|iPad|iPod/i.test(
     navigator.platform || navigator.userAgent,
   );
+}
+
+function dedupeTags(tags: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const tag of tags) {
+    const normalized = tag.trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function isAudioImportFile(file: File): boolean {
+  return (
+    isAudioImportName(file.name, file.type) ||
+    (!isMarkdownImportName(file.name, file.type) &&
+      (file.size > 0 || !file.name))
+  );
+}
+
+function droppedSourceName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+function audioImportOptions(
+  importMode: AudioImportMode | undefined,
+  metadata: AudioImportMetadata | null,
+): AudioImportOptions {
+  return {
+    importMode,
+    ...(metadata?.title ? { title: metadata.title } : {}),
+    ...(metadata?.tags?.length ? { tags: metadata.tags } : {}),
+  };
 }
 
 export default function App() {
@@ -83,6 +249,14 @@ export default function App() {
     return saved ? Number(saved) : 100;
   });
   const [dropZoneVisible, setDropZoneVisible] = useState(false);
+  const [dropZoneMode, setDropZoneMode] = useState<DropZoneMode>("generic");
+  const [dropZoneHoverMode, setDropZoneHoverMode] =
+    useState<AudioImportMode | null>(null);
+  const [audioImportPrompt, setAudioImportPrompt] = useState<{
+    sourceName: string;
+  } | null>(null);
+  const [audioPromptTitle, setAudioPromptTitle] = useState("");
+  const [audioPromptTags, setAudioPromptTags] = useState<string[]>([]);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [notesDirBanner, setNotesDirBanner] = useState(false);
   const [notesDirPath, setNotesDirPath] = useState("");
@@ -156,6 +330,13 @@ export default function App() {
   const primaryModifier = isMacOS() ? "⌘" : "Ctrl";
 
   const panelRefs = useRef<Map<string, PanelHandle>>(new Map());
+  const dropNotesZoneRef = useRef<HTMLDivElement>(null);
+  const dropMeetingsZoneRef = useRef<HTMLDivElement>(null);
+  const audioPromptTitleRef = useRef<HTMLInputElement>(null);
+  const audioPromptTagInputRef = useRef<TagInputHandle>(null);
+  const audioPromptResolverRef = useRef<
+    ((metadata: AudioImportMetadata | null) => void) | null
+  >(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragStartWidths = useRef<number[]>([]);
   const prevActivePanelRef = useRef(0);
@@ -171,6 +352,70 @@ export default function App() {
         }
         return nextVal;
       });
+    },
+    [],
+  );
+
+  const promptAudioImportMetadata = useCallback(
+    (sourceName: string) =>
+      new Promise<AudioImportMetadata | null>((resolve) => {
+        audioPromptResolverRef.current?.(null);
+        audioPromptResolverRef.current = resolve;
+        setAudioPromptTitle("");
+        setAudioPromptTags([]);
+        setAudioImportPrompt({ sourceName });
+      }),
+    [],
+  );
+
+  const finishAudioImportPrompt = useCallback(
+    (useMetadata: boolean) => {
+      const resolve = audioPromptResolverRef.current;
+      audioPromptResolverRef.current = null;
+      setAudioImportPrompt(null);
+
+      if (!resolve) {
+        setAudioPromptTitle("");
+        setAudioPromptTags([]);
+        return;
+      }
+
+      if (!useMetadata) {
+        setAudioPromptTitle("");
+        setAudioPromptTags([]);
+        resolve(null);
+        return;
+      }
+
+      const pendingTag = audioPromptTagInputRef.current?.flush();
+      const title = audioPromptTitle.trim();
+      const tags = dedupeTags([
+        ...audioPromptTags,
+        ...(pendingTag ? [pendingTag] : []),
+      ]);
+      setAudioPromptTitle("");
+      setAudioPromptTags([]);
+      resolve(
+        title || tags.length > 0
+          ? {
+              ...(title ? { title } : {}),
+              ...(tags.length > 0 ? { tags } : {}),
+            }
+          : null,
+      );
+    },
+    [audioPromptTags, audioPromptTitle],
+  );
+
+  useEffect(() => {
+    if (!audioImportPrompt) return;
+    requestAnimationFrame(() => audioPromptTitleRef.current?.focus());
+  }, [audioImportPrompt]);
+
+  useEffect(
+    () => () => {
+      audioPromptResolverRef.current?.(null);
+      audioPromptResolverRef.current = null;
     },
     [],
   );
@@ -502,9 +747,10 @@ export default function App() {
               note_id: string;
               summary: string | null;
               transcript: string | null;
+              output?: string | null;
             };
           }) => {
-            const { note_id, summary, transcript } = event.payload;
+            const { note_id, summary, transcript, output } = event.payload;
             const sourcePanelId = recordingNoteToPanelRef.current.get(note_id);
             if (sourcePanelId) {
               setProcessingProgressByPanel((prev) => {
@@ -533,6 +779,9 @@ export default function App() {
               };
             });
             void refreshSharedState();
+            if (output === "plain-note" || output === "recording-note") {
+              return;
+            }
             if (summary && transcript) {
               // Existing note — first try the panel where recording started.
               let found = false;
@@ -1351,31 +1600,103 @@ export default function App() {
     };
   }, [panels]);
 
-  // Drag-and-drop import — use a ref so the listener doesn't need to re-subscribe
-  const handleImportRef = useRef<(paths: string[]) => Promise<void>>(null!);
-  handleImportRef.current = useCallback(
-    async (paths: string[]) => {
-      setImportStatus(
-        `Importing ${paths.length} file${paths.length > 1 ? "s" : ""}...`,
-      );
+  // Drag-and-drop import — use refs so listeners don't need to re-subscribe
+  const nativeDropHandledAtRef = useRef(0);
+  const pendingDomDropTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const domDragDepthRef = useRef(0);
+  const handleImportPathsRef = useRef<
+    (paths: string[], audioImportMode?: AudioImportMode) => Promise<void>
+  >(null!);
+  const handleImportFilesRef = useRef<
+    (files: File[], audioImportMode?: AudioImportMode) => Promise<void>
+  >(null!);
+
+  const audioImportModeAtPoint = useCallback(
+    (clientX: number, clientY: number): AudioImportMode => {
+      const zones: Array<[HTMLDivElement | null, AudioImportMode]> = [
+        [dropNotesZoneRef.current, "plain-note"],
+        [dropMeetingsZoneRef.current, "recording-note"],
+      ];
+      for (const [element, mode] of zones) {
+        if (!element) continue;
+        const rect = element.getBoundingClientRect();
+        if (
+          clientX >= rect.left &&
+          clientX <= rect.right &&
+          clientY >= rect.top &&
+          clientY <= rect.bottom
+        ) {
+          return mode;
+        }
+      }
+      return clientX < window.innerWidth / 2 ? "plain-note" : "recording-note";
+    },
+    [],
+  );
+
+  handleImportPathsRef.current = useCallback(
+    async (paths: string[], audioImportMode?: AudioImportMode) => {
+      const markdownPaths = paths.filter(isMarkdownImportPath);
+      const audioPaths = paths.filter(isAudioImportPath);
+      const total = markdownPaths.length + audioPaths.length;
+
+      if (total === 0) {
+        setImportStatus("No supported files imported");
+        setTimeout(() => setImportStatus(null), 3000);
+        return;
+      }
+
+      const audioMetadataByPath = new Map<string, AudioImportMetadata | null>();
+      for (const path of audioPaths) {
+        audioMetadataByPath.set(
+          path,
+          await promptAudioImportMetadata(droppedSourceName(path)),
+        );
+      }
+
+      setImportStatus(`Importing ${total} file${total > 1 ? "s" : ""}...`);
       let firstMeta: NoteMetadata | null = null;
+      let firstMetaIsAudio = false;
       let count = 0;
 
-      for (const path of paths) {
+      for (const path of markdownPaths) {
         try {
           const meta = await importMarkdownFile(path);
-          if (!firstMeta) firstMeta = meta;
+          if (!firstMeta) {
+            firstMeta = meta;
+            firstMetaIsAudio = false;
+          }
           count++;
         } catch (e) {
           console.error("Failed to import", path, e);
         }
       }
 
+      for (const path of audioPaths) {
+        try {
+          const meta = await importAudioFile(path, {
+            ...audioImportOptions(
+              audioImportMode,
+              audioMetadataByPath.get(path) ?? null,
+            ),
+          });
+          if (!firstMeta) {
+            firstMeta = meta;
+            firstMetaIsAudio = true;
+          }
+          count++;
+        } catch (e) {
+          console.error("Failed to import audio", path, e);
+        }
+      }
+
       if (count > 0) {
         await refreshSharedState();
         setImportStatus(`Imported ${count} note${count > 1 ? "s" : ""}`);
-        // Open the note only when importing a single file
-        if (count === 1 && firstMeta) {
+        // Audio imports open from the recording-complete event.
+        if (count === 1 && firstMeta && !firstMetaIsAudio) {
           const activePanel = panelRefs.current.get(
             panels[activePanelIndex]?.id,
           );
@@ -1389,7 +1710,83 @@ export default function App() {
 
       setTimeout(() => setImportStatus(null), 3000);
     },
-    [panels, activePanelIndex, refreshSharedState],
+    [panels, activePanelIndex, refreshSharedState, promptAudioImportMetadata],
+  );
+
+  handleImportFilesRef.current = useCallback(
+    async (files: File[], audioImportMode?: AudioImportMode) => {
+      const markdownFiles = files.filter((file) =>
+        isMarkdownImportName(file.name, file.type),
+      );
+      const audioFiles = files.filter(
+        (file) =>
+          isAudioImportName(file.name, file.type) ||
+          (!!audioImportMode && !isMarkdownImportName(file.name, file.type)),
+      );
+      const total = markdownFiles.length + audioFiles.length;
+
+      if (total === 0) {
+        setImportStatus("No supported files imported");
+        setTimeout(() => setImportStatus(null), 3000);
+        return;
+      }
+
+      const audioMetadataByFile = new Map<File, AudioImportMetadata | null>();
+      for (const file of audioFiles) {
+        audioMetadataByFile.set(
+          file,
+          await promptAudioImportMetadata(file.name || "voice-memo.m4a"),
+        );
+      }
+
+      setImportStatus(`Importing ${total} file${total > 1 ? "s" : ""}...`);
+      let firstMeta: NoteMetadata | null = null;
+      let count = 0;
+
+      for (const file of markdownFiles) {
+        try {
+          const meta = await importMarkdownData(
+            file.name || "dropped-note.md",
+            await file.text(),
+          );
+          if (!firstMeta) firstMeta = meta;
+          count++;
+        } catch (e) {
+          console.error("Failed to import dropped note", file.name, e);
+        }
+      }
+
+      for (const file of audioFiles) {
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          await importAudioData(file.name || "voice-memo.m4a", bytes, {
+            ...audioImportOptions(
+              audioImportMode,
+              audioMetadataByFile.get(file) ?? null,
+            ),
+          });
+          count++;
+        } catch (e) {
+          console.error("Failed to import dropped audio", file.name, e);
+        }
+      }
+
+      if (count > 0) {
+        await refreshSharedState();
+        setImportStatus(`Imported ${count} note${count > 1 ? "s" : ""}`);
+        if (count === 1 && firstMeta && audioFiles.length === 0) {
+          const activePanel = panelRefs.current.get(
+            panels[activePanelIndex]?.id,
+          );
+          activePanel?.loadNote(firstMeta.id);
+        }
+      } else {
+        setImportStatus("No files imported");
+      }
+
+      setTimeout(() => setImportStatus(null), 3000);
+    },
+    [panels, activePanelIndex, refreshSharedState, promptAudioImportMetadata],
   );
 
   useEffect(() => {
@@ -1402,9 +1799,9 @@ export default function App() {
         const webview = getCurrentWebview();
         const fn = await webview.onDragDropEvent((event) => {
           if (cancelled) return;
-          if (event.payload.type === "enter") {
+          if (event.payload.type === "enter" || event.payload.type === "over") {
             const paths: string[] = (event.payload as any).paths ?? [];
-            if (paths.some((p) => p.endsWith(".md"))) {
+            if (paths.some(isImportablePath)) {
               setDropZoneVisible(true);
             }
           } else if (event.payload.type === "leave") {
@@ -1412,9 +1809,16 @@ export default function App() {
           } else if (event.payload.type === "drop") {
             setDropZoneVisible(false);
             const paths: string[] = (event.payload as any).paths ?? [];
-            const mdPaths = paths.filter((p: string) => p.endsWith(".md"));
-            if (mdPaths.length > 0) {
-              handleImportRef.current(mdPaths);
+            const importPaths = paths.filter((p: string) =>
+              isImportablePath(p),
+            );
+            if (importPaths.length > 0) {
+              nativeDropHandledAtRef.current = Date.now();
+              if (pendingDomDropTimeoutRef.current) {
+                clearTimeout(pendingDomDropTimeoutRef.current);
+                pendingDomDropTimeoutRef.current = null;
+              }
+              handleImportPathsRef.current(importPaths);
             }
           }
         });
@@ -1434,6 +1838,99 @@ export default function App() {
       unlisten?.();
     };
   }, []);
+
+  useEffect(() => {
+    const handleDragEnter = (event: DragEvent) => {
+      if (!hasImportableDataTransfer(event.dataTransfer)) return;
+      domDragDepthRef.current += 1;
+      const showAudioChoices = shouldShowAudioDropChoices(event.dataTransfer);
+      setDropZoneMode(showAudioChoices ? "audio" : "generic");
+      setDropZoneHoverMode(
+        showAudioChoices
+          ? audioImportModeAtPoint(event.clientX, event.clientY)
+          : null,
+      );
+      setDropZoneVisible(true);
+    };
+
+    const handleDragOver = (event: DragEvent) => {
+      if (!hasImportableDataTransfer(event.dataTransfer)) return;
+      event.preventDefault();
+      const showAudioChoices = shouldShowAudioDropChoices(event.dataTransfer);
+      setDropZoneMode(showAudioChoices ? "audio" : "generic");
+      setDropZoneHoverMode(
+        showAudioChoices
+          ? audioImportModeAtPoint(event.clientX, event.clientY)
+          : null,
+      );
+      setDropZoneVisible(true);
+    };
+
+    const handleDragLeave = (event: DragEvent) => {
+      if (!hasImportableDataTransfer(event.dataTransfer)) return;
+      domDragDepthRef.current = Math.max(0, domDragDepthRef.current - 1);
+      if (domDragDepthRef.current === 0) {
+        setDropZoneVisible(false);
+        setDropZoneMode("generic");
+        setDropZoneHoverMode(null);
+      }
+    };
+
+    const handleDrop = (event: DragEvent) => {
+      if (!hasImportableDataTransfer(event.dataTransfer)) return;
+      event.preventDefault();
+      domDragDepthRef.current = 0;
+      setDropZoneVisible(false);
+      setDropZoneMode("generic");
+      setDropZoneHoverMode(null);
+
+      const dataTransfer = event.dataTransfer;
+      if (!dataTransfer) return;
+
+      const files = Array.from(dataTransfer.files ?? []);
+      const importPaths = importablePathsFromDataTransfer(dataTransfer);
+      if (files.length === 0 && importPaths.length === 0) {
+        setImportStatus("Drop did not include file data");
+        setTimeout(() => setImportStatus(null), 3000);
+        return;
+      }
+
+      if (pendingDomDropTimeoutRef.current) {
+        clearTimeout(pendingDomDropTimeoutRef.current);
+      }
+      const hasAudioDrop =
+        files.some(isAudioImportFile) || importPaths.some(isAudioImportPath);
+      const audioImportMode = hasAudioDrop
+        ? audioImportModeAtPoint(event.clientX, event.clientY)
+        : undefined;
+
+      pendingDomDropTimeoutRef.current = setTimeout(() => {
+        pendingDomDropTimeoutRef.current = null;
+        if (Date.now() - nativeDropHandledAtRef.current < 500) return;
+        if (files.length > 0) {
+          void handleImportFilesRef.current(files, audioImportMode);
+        } else {
+          void handleImportPathsRef.current(importPaths, audioImportMode);
+        }
+      }, 75);
+    };
+
+    window.addEventListener("dragenter", handleDragEnter);
+    window.addEventListener("dragover", handleDragOver);
+    window.addEventListener("dragleave", handleDragLeave);
+    window.addEventListener("drop", handleDrop);
+
+    return () => {
+      window.removeEventListener("dragenter", handleDragEnter);
+      window.removeEventListener("dragover", handleDragOver);
+      window.removeEventListener("dragleave", handleDragLeave);
+      window.removeEventListener("drop", handleDrop);
+      if (pendingDomDropTimeoutRef.current) {
+        clearTimeout(pendingDomDropTimeoutRef.current);
+        pendingDomDropTimeoutRef.current = null;
+      }
+    };
+  }, [audioImportModeAtPoint]);
 
   // Drag splitter handling
   const handleDrag = useCallback(
@@ -1620,7 +2117,83 @@ export default function App() {
       {dropZoneVisible &&
         createPortal(
           <div className="drop-zone-overlay">
-            <div className="drop-zone-content">Drop .md files to import</div>
+            {dropZoneMode === "audio" ? (
+              <div className="drop-zone-grid">
+                <div
+                  ref={dropNotesZoneRef}
+                  className={`drop-zone-card ${dropZoneHoverMode === "plain-note" ? "active" : ""}`}
+                >
+                  <div className="drop-zone-title">Notes</div>
+                  <div className="drop-zone-subtitle">Transcript only</div>
+                </div>
+                <div
+                  ref={dropMeetingsZoneRef}
+                  className={`drop-zone-card ${dropZoneHoverMode === "recording-note" ? "active" : ""}`}
+                >
+                  <div className="drop-zone-title">Meetings</div>
+                  <div className="drop-zone-subtitle">Summary + transcript</div>
+                </div>
+              </div>
+            ) : (
+              <div className="drop-zone-content">Drop notes to import</div>
+            )}
+          </div>,
+          document.body,
+        )}
+      {audioImportPrompt &&
+        createPortal(
+          <div className="audio-import-prompt-overlay">
+            <form
+              className="audio-import-prompt"
+              onSubmit={(event) => {
+                event.preventDefault();
+                finishAudioImportPrompt(true);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  finishAudioImportPrompt(false);
+                }
+              }}
+            >
+              <div className="audio-import-prompt-heading">Voice note</div>
+              <div className="audio-import-prompt-source">
+                {audioImportPrompt.sourceName}
+              </div>
+              <label className="audio-import-field">
+                <span>Title</span>
+                <input
+                  ref={audioPromptTitleRef}
+                  className="title-input audio-import-title-input"
+                  type="text"
+                  value={audioPromptTitle}
+                  onChange={(event) => setAudioPromptTitle(event.target.value)}
+                  placeholder="Untitled"
+                />
+              </label>
+              <div className="audio-import-field">
+                <span>Tags</span>
+                <TagInput
+                  ref={audioPromptTagInputRef}
+                  tags={audioPromptTags}
+                  allTags={allTags}
+                  onChange={setAudioPromptTags}
+                  autoFocus={false}
+                />
+              </div>
+              <div className="audio-import-actions">
+                <button
+                  type="button"
+                  className="audio-import-btn"
+                  onClick={() => finishAudioImportPrompt(false)}
+                >
+                  Skip
+                </button>
+                <button type="submit" className="audio-import-btn primary">
+                  Import
+                </button>
+              </div>
+            </form>
           </div>,
           document.body,
         )}

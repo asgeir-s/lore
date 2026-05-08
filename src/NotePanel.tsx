@@ -1116,7 +1116,8 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
                 {effectiveProcessingProgress.replace(/\.+$/, "")}
                 <span className="related-loading"> ...</span>
               </span>
-            ) : tags.includes("meeting") && loadedNoteId ? null : (
+            ) : (tags.includes("meeting") || tags.includes("voice-memo")) &&
+              loadedNoteId ? null : (
               <button
                 className="record-btn"
                 onClick={onStartRecording}
