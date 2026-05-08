@@ -267,7 +267,7 @@ export default function App() {
   const [gitBanner, setGitBanner] = useState(false);
   const [gitRemoteUrl, setGitRemoteUrl] = useState("");
   const [gitError, setGitError] = useState<string | null>(null);
-  const [closeWarningIndex, setCloseWarningIndex] = useState<number | null>(
+  const [closeWarningPanelId, setCloseWarningPanelId] = useState<string | null>(
     null,
   );
   const closeWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(
@@ -1125,7 +1125,7 @@ export default function App() {
 
       if (closeWarningTimeout.current)
         clearTimeout(closeWarningTimeout.current);
-      setCloseWarningIndex(null);
+      setCloseWarningPanelId(null);
       if (recordingCloseWarningTimeout.current) {
         clearTimeout(recordingCloseWarningTimeout.current);
       }
@@ -1269,23 +1269,35 @@ export default function App() {
         e.preventDefault();
         if (panels.length <= 1) return;
         if (handleRecordingPanelClose(activePanelIndex)) return;
-        if (activePanel.hasUnsavedChanges()) {
-          if (closeWarningIndex === activePanelIndex) {
-            // Second press — confirm close, discard unsaved content
-            if (closeWarningTimeout.current)
+
+        if (closeWarningPanelId) {
+          const warningIndex = panels.findIndex(
+            (panel) => panel.id === closeWarningPanelId,
+          );
+          const warningPanel = panelRefs.current.get(closeWarningPanelId);
+          if (warningIndex !== -1 && warningPanel?.hasUnsavedChanges()) {
+            if (closeWarningTimeout.current) {
               clearTimeout(closeWarningTimeout.current);
-            setCloseWarningIndex(null);
-            closePanel(activePanelIndex);
-          } else {
-            // First press — show warning
-            if (closeWarningTimeout.current)
-              clearTimeout(closeWarningTimeout.current);
-            setCloseWarningIndex(activePanelIndex);
-            closeWarningTimeout.current = setTimeout(
-              () => setCloseWarningIndex(null),
-              3000,
-            );
+            }
+            setCloseWarningPanelId(null);
+            warningPanel.discardEdits();
+            closePanel(warningIndex);
+            return;
           }
+          setCloseWarningPanelId(null);
+        }
+
+        if (activePanel.hasUnsavedChanges()) {
+          const activePanelId = panels[activePanelIndex]?.id;
+          if (!activePanelId) return;
+          if (closeWarningTimeout.current) {
+            clearTimeout(closeWarningTimeout.current);
+          }
+          setCloseWarningPanelId(activePanelId);
+          closeWarningTimeout.current = setTimeout(
+            () => setCloseWarningPanelId(null),
+            3000,
+          );
         } else {
           closePanel(activePanelIndex);
         }
@@ -1527,7 +1539,7 @@ export default function App() {
       findPanelWithNote,
       openNoteToRight,
       vimEnabled,
-      closeWarningIndex,
+      closeWarningPanelId,
       deleteWarning,
       searchPaletteOpen,
       showSettings,
@@ -2202,7 +2214,7 @@ export default function App() {
           <div className="import-toast">{importStatus}</div>,
           document.body,
         )}
-      {closeWarningIndex !== null &&
+      {closeWarningPanelId !== null &&
         createPortal(
           <div className="close-warning-toast">
             Unsaved changes — press <kbd>{primaryModifier}</kbd> <kbd>W</kbd>{" "}

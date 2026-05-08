@@ -579,6 +579,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           );
         },
         discardEdits: () => {
+          clearLocalDraft();
           if (loadedNoteId) {
             // Reload the note, discarding changes
             loadNoteInternal(loadedNoteId, false);
@@ -697,6 +698,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         loadNote,
         loadNoteInternal,
         clearPanel,
+        clearLocalDraft,
         handleSave,
         handleTogglePin,
         saveIfNeeded,
