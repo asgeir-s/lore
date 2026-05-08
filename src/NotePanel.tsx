@@ -145,6 +145,14 @@ function removeDraft(key: string): void {
   }
 }
 
+function removeDraftForSource(sourceKey: string): void {
+  removeDraft(`${DRAFT_STORAGE_PREFIX}${sourceKey}`);
+  const latest = readDraft(DRAFT_LATEST_KEY);
+  if (latest?.sourceKey === sourceKey) {
+    removeDraft(DRAFT_LATEST_KEY);
+  }
+}
+
 function isDraftMeaningful(
   draft: Pick<LocalDraft, "title" | "content" | "tags">,
 ): boolean {
@@ -157,6 +165,17 @@ function isDraftMeaningful(
 
 function isDraftFresh(draft: LocalDraft): boolean {
   return Date.now() - draft.updatedAt <= DRAFT_MAX_AGE_MS;
+}
+
+function draftMatchesSavedNote(
+  draft: LocalDraft,
+  note: Pick<NoteMetadata, "title" | "tags"> & { content: string },
+): boolean {
+  return (
+    draft.content === note.content &&
+    draft.title === note.title &&
+    JSON.stringify(draft.tags) === JSON.stringify(note.tags)
+  );
 }
 
 export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
@@ -286,12 +305,8 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     );
 
     const clearLocalDraft = useCallback(() => {
-      removeDraft(panelDraftKey);
-      const latest = readDraft(DRAFT_LATEST_KEY);
-      if (latest?.sourceKey === draftStorageKey) {
-        removeDraft(DRAFT_LATEST_KEY);
-      }
-    }, [panelDraftKey, draftStorageKey]);
+      removeDraftForSource(draftStorageKey);
+    }, [draftStorageKey]);
 
     const persistLocalDraft = useCallback(() => {
       const draft: LocalDraft = {
@@ -706,21 +721,6 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             return;
           }
 
-          const own = readDraft(panelDraftKey);
-          const latest = allowGlobalDraftRestore
-            ? readDraft(DRAFT_LATEST_KEY)
-            : null;
-          const candidates = [own, latest]
-            .filter((draft): draft is LocalDraft => !!draft)
-            .filter(isDraftFresh)
-            .filter(isDraftMeaningful)
-            .sort((a, b) => b.updatedAt - a.updatedAt);
-
-          const draft = candidates[0];
-          if (!draft || cancelled) {
-            return;
-          }
-
           const hasLocalInput = () =>
             contentRef.current.trim().length > 0 ||
             titleRef.current.trim().length > 0 ||
@@ -730,18 +730,46 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             return;
           }
 
-          if (draft.noteId) {
-            try {
-              const note = await getNote(draft.noteId);
-              if (cancelled) return;
+          if (!allowGlobalDraftRestore) {
+            return;
+          }
+
+          const own = readDraft(panelDraftKey);
+          const latest = readDraft(DRAFT_LATEST_KEY);
+          const candidates = [own, latest]
+            .filter((draft): draft is LocalDraft => !!draft)
+            .filter(isDraftFresh)
+            .filter(isDraftMeaningful)
+            .sort((a, b) => b.updatedAt - a.updatedAt);
+
+          for (const draft of candidates) {
+            if (cancelled) return;
+
+            if (draft.noteId) {
+              let note: Awaited<ReturnType<typeof getNote>>;
+              try {
+                note = await getNote(draft.noteId);
+              } catch {
+                removeDraftForSource(draft.sourceKey);
+                continue;
+              }
+
+              if (draftMatchesSavedNote(draft, note)) {
+                removeDraftForSource(draft.sourceKey);
+                continue;
+              }
+
+              if (cancelled || hasLocalInput()) {
+                return;
+              }
+
               setLoadedNoteId(note.id);
               loadedNoteIdRef.current = note.id;
               savedContentRef.current = note.content;
               savedTitleRef.current = note.title;
               savedTagsRef.current = note.tags;
               setPinned(isPinnedNotePath(note.path));
-            } catch {
-              if (cancelled) return;
+            } else {
               setLoadedNoteId(null);
               loadedNoteIdRef.current = null;
               savedContentRef.current = "";
@@ -749,29 +777,27 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
               savedTagsRef.current = [];
               setPinned(false);
             }
-          } else {
-            setLoadedNoteId(null);
-            loadedNoteIdRef.current = null;
-            savedContentRef.current = "";
-            savedTitleRef.current = "";
-            savedTagsRef.current = [];
-            setPinned(false);
-          }
 
-          if (cancelled || hasLocalInput()) {
+            if (cancelled || hasLocalInput()) {
+              return;
+            }
+
+            if (draft.sourceKey !== draftStorageKey) {
+              removeDraftForSource(draft.sourceKey);
+            }
+
+            setContent(draft.content);
+            contentRef.current = draft.content;
+            setTitle(draft.title);
+            titleRef.current = draft.title;
+            titleManuallyEditedRef.current = draft.title.trim().length > 0;
+            setTags(draft.tags);
+            tagsRef.current = draft.tags;
+            setShowPinnedList(false);
+            setUserModified(true);
+            initialLoadDone.current = true;
             return;
           }
-
-          setContent(draft.content);
-          contentRef.current = draft.content;
-          setTitle(draft.title);
-          titleRef.current = draft.title;
-          titleManuallyEditedRef.current = draft.title.trim().length > 0;
-          setTags(draft.tags);
-          tagsRef.current = draft.tags;
-          setShowPinnedList(false);
-          setUserModified(true);
-          initialLoadDone.current = true;
         } finally {
           if (!cancelled) {
             draftRestoreCheckedRef.current = true;
