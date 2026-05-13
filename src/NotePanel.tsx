@@ -209,6 +209,9 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     ref,
   ) => {
     const [content, setContent] = useState("");
+    const [meetingTranscript, setMeetingTranscript] = useState<string | null>(
+      null,
+    );
     const [title, setTitle] = useState("");
     const [loadedNoteId, setLoadedNoteId] = useState<string | null>(null);
     const [tags, setTags] = useState<string[]>([]);
@@ -337,6 +340,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           }
           const note = await getNote(noteId);
           setContent(note.content);
+          setMeetingTranscript(note.transcript ?? null);
           contentRef.current = note.content;
           setTitle(note.title);
           titleRef.current = note.title;
@@ -368,6 +372,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     const clearPanel = useCallback(() => {
       clearLocalDraft();
       setContent("");
+      setMeetingTranscript(null);
       contentRef.current = "";
       setTitle("");
       titleRef.current = "";
@@ -678,6 +683,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             );
             const note = await getNote(noteIdNow);
             setContent(note.content);
+            setMeetingTranscript(note.transcript ?? null);
             contentRef.current = note.content;
             setTitle(meta.title);
             titleRef.current = meta.title;
@@ -770,6 +776,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
               savedContentRef.current = note.content;
               savedTitleRef.current = note.title;
               savedTagsRef.current = note.tags;
+              setMeetingTranscript(note.transcript ?? null);
               setPinned(isPinnedNotePath(note.path));
             } else {
               setLoadedNoteId(null);
@@ -777,6 +784,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
               savedContentRef.current = "";
               savedTitleRef.current = "";
               savedTagsRef.current = [];
+              setMeetingTranscript(null);
               setPinned(false);
             }
 
@@ -979,6 +987,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         await retranscribeNote(loadedNoteId);
         const noteContent = await getNote(loadedNoteId);
         setContent(noteContent.content);
+        setMeetingTranscript(noteContent.transcript ?? null);
         contentRef.current = noteContent.content;
         savedContentRef.current = noteContent.content;
         setMeetingView("transcript");
@@ -1000,6 +1009,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         await resummarizeNote(loadedNoteId);
         const noteContent = await getNote(loadedNoteId);
         setContent(noteContent.content);
+        setMeetingTranscript(noteContent.transcript ?? null);
         contentRef.current = noteContent.content;
         savedContentRef.current = noteContent.content;
         setMeetingView("summary");
@@ -1174,20 +1184,18 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         </div>
         {!editing &&
           (() => {
+            const inlineTranscriptMatch = content.match(
+              /## Transcript\n+([\s\S]*?)$/,
+            );
+            const transcriptContent =
+              meetingTranscript ?? inlineTranscriptMatch?.[1]?.trim() ?? "";
             const hasSummary =
-              content.includes("## Summary") &&
-              content.includes("## Transcript");
+              content.includes("## Summary") && transcriptContent.length > 0;
             if (hasSummary) {
               const summaryMatch = content.match(
-                /## Summary\n+([\s\S]*?)(?=\n## Transcript)/,
-              );
-              const transcriptMatch = content.match(
-                /## Transcript\n+([\s\S]*?)$/,
+                /## Summary\n+([\s\S]*?)(?=\n## Transcript|\n## [^\n]+|$)/,
               );
               const summaryContent = summaryMatch ? summaryMatch[1].trim() : "";
-              const transcriptContent = transcriptMatch
-                ? transcriptMatch[1].trim()
-                : "";
               // Everything before ## Summary is the user's notes
               const notesContent = content.split(/\n## Summary/)[0].trim();
               const hasNotes =

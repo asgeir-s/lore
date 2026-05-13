@@ -645,7 +645,7 @@ async fn retranscribe_note(state: State<'_, AppState>, id: String) -> Result<Not
     let (notes_dir, audio_path, whisper_model) = {
         let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
         let ms = state.model_settings.lock().map_err(|e| e.to_string())?;
-        let audio_path = notes::meeting_audio_dir(&dir).join(format!("{id}.wav"));
+        let audio_path = notes::recording_audio_path(&dir, &id);
         (dir.clone(), audio_path, ms.whisper_model.clone())
     };
 

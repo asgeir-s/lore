@@ -23,6 +23,7 @@ pub struct NoteContent {
     pub path: String,
     pub title: String,
     pub content: String,
+    pub transcript: Option<String>,
     pub tags: Vec<String>,
     pub created: String,
     pub modified: String,
@@ -42,12 +43,17 @@ struct Frontmatter {
     modified: Option<String>,
     tags: Option<Vec<String>>,
     starred: Option<bool>,
+    transcript_path: Option<String>,
 }
 
 pub const NOTES_COLLECTION_DIR: &str = "notes";
 pub const PINNED_COLLECTION_DIR: &str = "pinned";
-pub const MEETINGS_REL_DIR: &str = "notes/meetings";
-pub const MEETING_AUDIO_REL_DIR: &str = "notes/meetings/.audio";
+pub const TRANSCRIPTS_REL_DIR: &str = "transcripts";
+pub const RECORDING_AUDIO_REL_DIR: &str = ".recordings/audio";
+pub const RECORDING_JOBS_REL_DIR: &str = ".recordings/jobs";
+const LEGACY_MEETINGS_REL_DIR: &str = "notes/meetings";
+const LEGACY_MEETING_AUDIO_REL_DIR: &str = "notes/meetings/.audio";
+const LEGACY_MEETING_TRANSCRIPTS_REL_DIR: &str = "notes/meetings/.transcripts";
 const INDEX_FILE: &str = ".lore-index.json";
 
 pub fn notes_collection_dir(root_dir: &str) -> PathBuf {
@@ -58,12 +64,34 @@ pub fn pinned_collection_dir(root_dir: &str) -> PathBuf {
     Path::new(root_dir).join(PINNED_COLLECTION_DIR)
 }
 
-pub fn meetings_dir(root_dir: &str) -> PathBuf {
-    Path::new(root_dir).join(MEETINGS_REL_DIR)
+pub fn meeting_audio_dir(root_dir: &str) -> PathBuf {
+    Path::new(root_dir).join(RECORDING_AUDIO_REL_DIR)
 }
 
-pub fn meeting_audio_dir(root_dir: &str) -> PathBuf {
-    Path::new(root_dir).join(MEETING_AUDIO_REL_DIR)
+pub fn legacy_meeting_audio_dir(root_dir: &str) -> PathBuf {
+    Path::new(root_dir).join(LEGACY_MEETING_AUDIO_REL_DIR)
+}
+
+pub fn recording_jobs_dir(root_dir: &str) -> PathBuf {
+    Path::new(root_dir).join(RECORDING_JOBS_REL_DIR)
+}
+
+pub fn meeting_transcripts_dir(root_dir: &str) -> PathBuf {
+    Path::new(root_dir).join(TRANSCRIPTS_REL_DIR)
+}
+
+pub fn recording_audio_path(root_dir: &str, note_id: &str) -> PathBuf {
+    let current = meeting_audio_dir(root_dir).join(format!("{note_id}.wav"));
+    if current.exists() {
+        return current;
+    }
+
+    let legacy = legacy_meeting_audio_dir(root_dir).join(format!("{note_id}.wav"));
+    if legacy.exists() {
+        return legacy;
+    }
+
+    current
 }
 
 pub fn note_abspath(root_dir: &str, rel_path: &str) -> PathBuf {
@@ -155,6 +183,33 @@ fn move_dir_contents(src: &Path, dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn move_visible_dir_contents(src: &Path, dest: &Path) -> io::Result<()> {
+    if !src.exists() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(dest)?;
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        if file_name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+
+        let from = entry.path();
+        let to = collision_safe_dest_path(&dest.join(&file_name));
+        if entry.file_type()?.is_dir() {
+            move_dir_contents(&from, &to)?;
+        } else {
+            move_path(&from, &to)?;
+        }
+    }
+
+    let _ = fs::remove_dir(src);
+    Ok(())
+}
+
 pub fn ensure_storage_layout(root_dir: &str) -> io::Result<()> {
     let root = Path::new(root_dir);
     fs::create_dir_all(root)?;
@@ -163,10 +218,16 @@ pub fn ensure_storage_layout(root_dir: &str) -> io::Result<()> {
     let pinned_dir = pinned_collection_dir(root_dir);
     fs::create_dir_all(&notes_dir)?;
     fs::create_dir_all(&pinned_dir)?;
+    migrate_legacy_recording_storage(root_dir)?;
 
     let legacy_meetings = root.join("meetings");
     if legacy_meetings.exists() {
-        move_dir_contents(&legacy_meetings, &notes_dir.join("meetings"))?;
+        move_dir_contents(&legacy_meetings, &notes_dir)?;
+    }
+
+    let legacy_meetings_in_notes = notes_dir.join("meetings");
+    if legacy_meetings_in_notes.exists() {
+        move_visible_dir_contents(&legacy_meetings_in_notes, &notes_dir)?;
     }
 
     for entry in fs::read_dir(root)? {
@@ -182,6 +243,54 @@ pub fn ensure_storage_layout(root_dir: &str) -> io::Result<()> {
         move_path(&path, &dest)?;
     }
 
+    Ok(())
+}
+
+fn migrate_legacy_recording_storage(root_dir: &str) -> io::Result<()> {
+    let legacy_audio_dir = Path::new(root_dir).join(LEGACY_MEETING_AUDIO_REL_DIR);
+    if legacy_audio_dir.exists() {
+        fs::create_dir_all(meeting_audio_dir(root_dir))?;
+        fs::create_dir_all(recording_jobs_dir(root_dir))?;
+
+        for entry in fs::read_dir(&legacy_audio_dir)? {
+            let entry = entry?;
+            let from = entry.path();
+            if entry.file_type()?.is_dir() {
+                continue;
+            }
+
+            let file_name = entry.file_name();
+            let file_name_str = file_name.to_string_lossy();
+            let target_dir = if file_name_str.ends_with(".job.json") {
+                recording_jobs_dir(root_dir)
+            } else {
+                meeting_audio_dir(root_dir)
+            };
+            let target = collision_safe_dest_path(&target_dir.join(&file_name));
+            move_path(&from, &target)?;
+        }
+
+        let _ = fs::remove_dir(&legacy_audio_dir);
+    }
+
+    let legacy_transcripts_dir = Path::new(root_dir).join(LEGACY_MEETING_TRANSCRIPTS_REL_DIR);
+    if legacy_transcripts_dir.exists() {
+        let transcripts_dir = meeting_transcripts_dir(root_dir);
+        fs::create_dir_all(&transcripts_dir)?;
+        for entry in fs::read_dir(&legacy_transcripts_dir)? {
+            let entry = entry?;
+            let from = entry.path();
+            if entry.file_type()?.is_dir() {
+                continue;
+            }
+            let target = collision_safe_dest_path(&transcripts_dir.join(entry.file_name()));
+            move_path(&from, &target)?;
+        }
+        let _ = fs::remove_dir(&legacy_transcripts_dir);
+    }
+
+    let legacy_meetings = Path::new(root_dir).join(LEGACY_MEETINGS_REL_DIR);
+    let _ = fs::remove_dir(legacy_meetings);
     Ok(())
 }
 
@@ -221,6 +330,180 @@ fn parse_raw_yaml(content: &str) -> (Option<Mapping>, String) {
     } else {
         (None, content.to_string())
     }
+}
+
+fn yaml_string(mapping: &Mapping, key: &str) -> Option<String> {
+    mapping
+        .get(Value::String(key.into()))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn set_yaml_string(mapping: &mut Mapping, key: &str, value: &str) {
+    mapping.insert(Value::String(key.into()), Value::String(value.into()));
+}
+
+fn serialize_frontmatter(mapping: &Mapping) -> String {
+    let yaml_str = serde_yaml::to_string(mapping).unwrap_or_default();
+    let yaml_body = yaml_str.strip_prefix("---\n").unwrap_or(&yaml_str);
+    format!("---\n{}---\n", yaml_body)
+}
+
+fn transcript_rel_path(note_id: &str) -> String {
+    format!("{TRANSCRIPTS_REL_DIR}/{note_id}.md")
+}
+
+fn is_safe_relative_path(path: &str) -> bool {
+    let path = Path::new(path);
+    !path.is_absolute()
+        && path.components().all(|component| {
+            matches!(
+                component,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        })
+}
+
+fn is_hidden_rel_path(path: &str) -> bool {
+    path.split('/').any(|part| part.starts_with('.'))
+}
+
+fn read_transcript_file(notes_dir: &str, rel_path: &str) -> io::Result<String> {
+    if !is_safe_relative_path(rel_path) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid transcript path",
+        ));
+    }
+    let path = note_abspath(notes_dir, rel_path);
+    if path.exists() {
+        return fs::read_to_string(path);
+    }
+
+    if let Some(file_name) =
+        rel_path.strip_prefix(&format!("{LEGACY_MEETING_TRANSCRIPTS_REL_DIR}/"))
+    {
+        let migrated_path = note_abspath(notes_dir, &format!("{TRANSCRIPTS_REL_DIR}/{file_name}"));
+        if migrated_path.exists() {
+            return fs::read_to_string(migrated_path);
+        }
+    }
+
+    fs::read_to_string(path)
+}
+
+pub fn write_meeting_transcript_file(
+    notes_dir: &str,
+    note_id: &str,
+    transcript: &str,
+) -> io::Result<String> {
+    let rel_path = transcript_rel_path(note_id);
+    let path = meeting_transcripts_dir(notes_dir).join(format!("{note_id}.md"));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut content = transcript.trim_end().to_string();
+    content.push('\n');
+    fs::write(path, content)?;
+    Ok(rel_path)
+}
+
+fn split_inline_transcript(body: &str) -> (String, Option<String>) {
+    let marker = "## Transcript";
+    let Some(pos) = body.find(marker) else {
+        return (body.to_string(), None);
+    };
+    let before = body[..pos].trim_end().to_string();
+    let after = body[pos + marker.len()..]
+        .trim_start_matches('\n')
+        .trim_end()
+        .to_string();
+    let mut stripped = before;
+    if !stripped.is_empty() {
+        stripped.push('\n');
+    }
+    (stripped, Some(after))
+}
+
+fn replace_summary_section(body: &str, summary: &str) -> io::Result<String> {
+    let summary_header = "## Summary";
+    let sum_pos = body
+        .find(summary_header)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No summary section found"))?;
+    let after_header_start = sum_pos + summary_header.len();
+    let after_header = &body[after_header_start..];
+    let suffix = after_header.find("\n## ").map(|pos| &after_header[pos..]);
+
+    let mut new_body = format!("{}## Summary\n\n{}\n", &body[..sum_pos], summary.trim_end());
+    if let Some(suffix) = suffix {
+        let suffix = suffix.trim_start_matches('\n');
+        if !suffix.trim().is_empty() {
+            new_body.push('\n');
+            new_body.push_str(suffix);
+            if !new_body.ends_with('\n') {
+                new_body.push('\n');
+            }
+        }
+    }
+    Ok(new_body)
+}
+
+fn read_note_transcript_from_parts(
+    notes_dir: &str,
+    raw_yaml: Option<&Mapping>,
+    frontmatter: Option<&Frontmatter>,
+    body: &str,
+) -> io::Result<Option<String>> {
+    let transcript_path = raw_yaml
+        .and_then(|mapping| yaml_string(mapping, "transcript_path"))
+        .or_else(|| frontmatter.and_then(|fm| fm.transcript_path.clone()));
+
+    if let Some(path) = transcript_path {
+        return read_transcript_file(notes_dir, &path).map(Some);
+    }
+
+    let (_, transcript) = split_inline_transcript(body);
+    Ok(transcript)
+}
+
+fn ensure_transcript_sidecar(
+    notes_dir: &str,
+    file_path: &Path,
+    id: &str,
+    raw_yaml: &mut Mapping,
+    body: &str,
+) -> io::Result<String> {
+    let target_path = transcript_rel_path(id);
+
+    if let Some(existing_path) = yaml_string(raw_yaml, "transcript_path") {
+        if existing_path == target_path {
+            return Ok(body.to_string());
+        }
+
+        let transcript = read_transcript_file(notes_dir, &existing_path)?;
+        write_meeting_transcript_file(notes_dir, id, &transcript)?;
+        set_yaml_string(raw_yaml, "transcript_path", &target_path);
+        let frontmatter = serialize_frontmatter(raw_yaml);
+        fs::write(file_path, format!("{frontmatter}{body}"))?;
+        if is_safe_relative_path(&existing_path) {
+            let old_path = note_abspath(notes_dir, &existing_path);
+            if old_path.exists() {
+                let _ = fs::remove_file(old_path);
+            }
+        }
+        return Ok(body.to_string());
+    }
+
+    let (body_without_transcript, transcript) = split_inline_transcript(body);
+    let Some(transcript) = transcript else {
+        return Ok(body.to_string());
+    };
+
+    let transcript_path = write_meeting_transcript_file(notes_dir, id, &transcript)?;
+    set_yaml_string(raw_yaml, "transcript_path", &transcript_path);
+    let frontmatter = serialize_frontmatter(raw_yaml);
+    fs::write(file_path, format!("{frontmatter}{body_without_transcript}"))?;
+    Ok(body_without_transcript)
 }
 
 /// Extract title from markdown body (first # heading or first line)
@@ -480,20 +763,26 @@ pub fn append_meeting_data(
     let file_path = note_abspath(notes_dir, &meta.path);
     let raw = fs::read_to_string(&file_path)?;
     let (raw_yaml, body) = parse_raw_yaml(&raw);
+    let mut raw_yaml = raw_yaml.unwrap_or_default();
 
     let mut tags = meta.tags.clone();
     if !tags.iter().any(|t| t == "meeting") {
         tags.push("meeting".to_string());
     }
 
-    let has_summary = body.lines().any(|line| line.trim() == "## Summary");
-    let has_transcript = body.lines().any(|line| line.trim() == "## Transcript");
-    let content = if has_summary && has_transcript {
-        body
+    let transcript_path = write_meeting_transcript_file(notes_dir, &meta.id, transcript)?;
+    set_yaml_string(&mut raw_yaml, "transcript_path", &transcript_path);
+
+    let (body_without_transcript, _) = split_inline_transcript(&body);
+    let has_summary = body_without_transcript
+        .lines()
+        .any(|line| line.trim() == "## Summary");
+    let content = if has_summary {
+        body_without_transcript
     } else {
-        let trimmed = body.trim_end();
+        let trimmed = body_without_transcript.trim_end();
         let separator = if trimmed.is_empty() { "" } else { "\n\n" };
-        format!("{trimmed}{separator}## Summary\n\n{summary}\n\n## Transcript\n\n{transcript}\n")
+        format!("{trimmed}{separator}## Summary\n\n{}\n", summary.trim_end())
     };
 
     // Keep user-defined titles. Replace only known auto-generated placeholders.
@@ -510,7 +799,7 @@ pub fn append_meeting_data(
         &modified,
         &tags,
         Some(&title),
-        raw_yaml.as_ref(),
+        Some(&raw_yaml),
     );
     let full_content = format!("{frontmatter}{content}");
     fs::write(&file_path, full_content)?;
@@ -588,10 +877,9 @@ pub fn get_note_transcript(notes_dir: &str, id: &str, index: &NoteIndex) -> io::
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?;
     let file_path = note_abspath(notes_dir, &meta.path);
     let raw = fs::read_to_string(&file_path)?;
-    let (_, body) = parse_raw_yaml(&raw);
-    let transcript = extract_section(&body, "## Transcript")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No transcript section found"))?;
-    Ok(transcript)
+    let (raw_yaml, body) = parse_raw_yaml(&raw);
+    read_note_transcript_from_parts(notes_dir, raw_yaml.as_ref(), None, &body)?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No transcript section found"))
 }
 
 /// Replace only the `## Transcript` section of a meeting note.
@@ -609,13 +897,20 @@ pub fn replace_meeting_transcript(
     let file_path = note_abspath(notes_dir, &meta.path);
     let raw = fs::read_to_string(&file_path)?;
     let (raw_yaml, body) = parse_raw_yaml(&raw);
+    let mut raw_yaml = raw_yaml.unwrap_or_default();
 
-    let pos = body
-        .find("## Transcript")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No transcript section found"))?;
-    let new_body = format!("{}## Transcript\n\n{}\n", &body[..pos], transcript);
+    let transcript_path = write_meeting_transcript_file(notes_dir, &meta.id, transcript)?;
+    set_yaml_string(&mut raw_yaml, "transcript_path", &transcript_path);
+    let (new_body, _) = split_inline_transcript(&body);
 
-    write_meeting_section(notes_dir, &meta, raw_yaml, new_body, index, &file_path)
+    write_meeting_section(
+        notes_dir,
+        &meta,
+        Some(raw_yaml),
+        new_body,
+        index,
+        &file_path,
+    )
 }
 
 /// Replace only the `## Summary` section of a meeting note.
@@ -633,27 +928,25 @@ pub fn replace_meeting_summary(
     let file_path = note_abspath(notes_dir, &meta.path);
     let raw = fs::read_to_string(&file_path)?;
     let (raw_yaml, body) = parse_raw_yaml(&raw);
+    let mut raw_yaml = raw_yaml.unwrap_or_default();
 
-    let sum_pos = body
-        .find("## Summary")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No summary section found"))?;
-    let trans_pos = body
-        .find("## Transcript")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No transcript section found"))?;
-    let new_body = format!(
-        "{}## Summary\n\n{}\n\n{}",
-        &body[..sum_pos],
-        summary,
-        &body[trans_pos..]
-    );
+    let (body_without_transcript, inline_transcript) = split_inline_transcript(&body);
+    if yaml_string(&raw_yaml, "transcript_path").is_none() {
+        if let Some(transcript) = inline_transcript {
+            let transcript_path = write_meeting_transcript_file(notes_dir, &meta.id, &transcript)?;
+            set_yaml_string(&mut raw_yaml, "transcript_path", &transcript_path);
+        }
+    }
+    let new_body = replace_summary_section(&body_without_transcript, summary)?;
 
-    write_meeting_section(notes_dir, &meta, raw_yaml, new_body, index, &file_path)
-}
-
-fn extract_section(body: &str, header: &str) -> Option<String> {
-    let pos = body.find(header)?;
-    let after = &body[pos + header.len()..];
-    Some(after.trim_start_matches('\n').trim_end().to_string())
+    write_meeting_section(
+        notes_dir,
+        &meta,
+        Some(raw_yaml),
+        new_body,
+        index,
+        &file_path,
+    )
 }
 
 fn write_meeting_section(
@@ -784,8 +1077,21 @@ pub fn delete_note(notes_dir: &str, id: &str, index: &mut NoteIndex) -> io::Resu
         .clone();
 
     let file_path = note_abspath(notes_dir, &meta.path);
+    let transcript_path = fs::read_to_string(&file_path).ok().and_then(|raw| {
+        let (raw_yaml, _) = parse_raw_yaml(&raw);
+        raw_yaml.and_then(|mapping| yaml_string(&mapping, "transcript_path"))
+    });
+
     if file_path.exists() {
         fs::remove_file(&file_path)?;
+    }
+    if let Some(transcript_path) = transcript_path {
+        if is_safe_relative_path(&transcript_path) {
+            let path = note_abspath(notes_dir, &transcript_path);
+            if path.exists() {
+                fs::remove_file(path)?;
+            }
+        }
     }
 
     index.notes.remove(id);
@@ -803,13 +1109,15 @@ pub fn get_note(notes_dir: &str, id: &str, index: &NoteIndex) -> io::Result<Note
 
     let file_path = note_abspath(notes_dir, &meta.path);
     let raw = fs::read_to_string(&file_path)?;
-    let (_fm, body) = parse_frontmatter(&raw);
+    let (raw_yaml, body) = parse_raw_yaml(&raw);
+    let transcript = read_note_transcript_from_parts(notes_dir, raw_yaml.as_ref(), None, &body)?;
 
     Ok(NoteContent {
         id: meta.id.clone(),
         path: meta.path.clone(),
         title: meta.title.clone(),
         content: body,
+        transcript,
         tags: meta.tags.clone(),
         created: meta.created.clone(),
         modified: meta.modified.clone(),
@@ -1151,15 +1459,26 @@ pub fn rebuild_index(notes_dir: &str) -> io::Result<NoteIndex> {
         if let Ok(entries) = glob::glob(pattern) {
             for entry in entries.flatten() {
                 if let Ok(content) = fs::read_to_string(&entry) {
-                    let (fm, body) = parse_frontmatter(&content);
+                    let rel_path =
+                        normalize_rel_path(entry.strip_prefix(notes_dir).unwrap_or(&entry))
+                            .trim_start_matches('/')
+                            .to_string();
+                    if is_hidden_rel_path(&rel_path) {
+                        continue;
+                    }
+
+                    let (mut raw_yaml, mut body) = parse_raw_yaml(&content);
+                    if let Some(raw_yaml) = raw_yaml.as_mut() {
+                        if let Some(id) = yaml_string(raw_yaml, "id") {
+                            body =
+                                ensure_transcript_sidecar(notes_dir, &entry, &id, raw_yaml, &body)?;
+                        }
+                    }
+                    let fm: Option<Frontmatter> = raw_yaml
+                        .and_then(|mapping| serde_yaml::from_value(Value::Mapping(mapping)).ok());
                     if let Some(fm) = fm {
                         if let Some(id) = fm.id {
                             let title = fm.title.unwrap_or_else(|| extract_title(&body));
-                            // Store relative path from notes_dir.
-                            let rel_path =
-                                normalize_rel_path(entry.strip_prefix(notes_dir).unwrap_or(&entry))
-                                    .trim_start_matches('/')
-                                    .to_string();
                             let created = fm.created.unwrap_or_default();
                             let modified = fm.modified.unwrap_or_else(|| created.clone());
                             let meta = NoteMetadata {
@@ -1589,6 +1908,83 @@ mod tests {
     }
 
     #[test]
+    fn test_append_meeting_data_stores_transcript_sidecar() {
+        let dir = setup_test_dir();
+        let mut index = NoteIndex::default();
+
+        let meta = save_note(
+            &dir,
+            None,
+            "# Meeting notes\n\nPersonal note",
+            &[],
+            None,
+            &mut index,
+        )
+        .unwrap();
+
+        let updated = append_meeting_data(
+            &dir,
+            &meta.id,
+            "Concise summary",
+            "Full raw transcript",
+            &mut index,
+        )
+        .unwrap();
+        let note_path = Path::new(&dir).join(&updated.path);
+        let raw = fs::read_to_string(note_path).unwrap();
+
+        assert!(raw.contains("## Summary\n\nConcise summary"));
+        assert!(raw.contains("transcript_path: transcripts/"));
+        assert!(!raw.contains("## Transcript"));
+        assert_eq!(
+            get_note_transcript(&dir, &meta.id, &index).unwrap().trim(),
+            "Full raw transcript"
+        );
+        assert_eq!(
+            get_note(&dir, &meta.id, &index)
+                .unwrap()
+                .transcript
+                .unwrap()
+                .trim(),
+            "Full raw transcript"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_rebuild_index_migrates_inline_transcript_to_root_sidecar() {
+        let dir = setup_test_dir();
+        let note_id = Uuid::new_v4().to_string();
+        let meetings = Path::new(&dir).join(LEGACY_MEETINGS_REL_DIR);
+        fs::create_dir_all(&meetings).unwrap();
+        let note_path = meetings.join("legacy-meeting.md");
+        fs::write(
+            &note_path,
+            format!(
+                "---\nid: {note_id}\ncreated: 2026-01-01T00:00:00+00:00\nmodified: 2026-01-01T00:00:00+00:00\ntags:\n  - meeting\n---\n# Legacy Meeting\n\n## Summary\n\nOld summary\n\n## Transcript\n\nOld transcript\n"
+            ),
+        )
+        .unwrap();
+
+        let rebuilt = rebuild_index(&dir).unwrap();
+        assert_eq!(rebuilt.notes.len(), 1);
+        assert!(!note_path.exists());
+        let migrated_path = Path::new(&dir).join("notes/legacy-meeting.md");
+        let migrated = fs::read_to_string(&migrated_path).unwrap();
+        assert!(migrated.contains("transcript_path: transcripts/"));
+        assert!(!migrated.contains("## Transcript"));
+        assert_eq!(
+            get_note_transcript(&dir, &note_id, &rebuilt)
+                .unwrap()
+                .trim(),
+            "Old transcript"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn test_list_recent_notes() {
         let dir = setup_test_dir();
         let mut index = NoteIndex::default();
@@ -1958,10 +2354,10 @@ mod tests {
     #[test]
     fn test_ensure_storage_layout_handles_meeting_name_collision() {
         let dir = setup_test_dir();
-        let target_meetings = Path::new(&dir).join("notes/meetings");
-        fs::create_dir_all(&target_meetings).unwrap();
+        let notes_dir = Path::new(&dir).join("notes");
+        fs::create_dir_all(&notes_dir).unwrap();
 
-        let existing = target_meetings.join("meeting.md");
+        let existing = notes_dir.join("meeting.md");
         fs::write(&existing, "# Existing Meeting").unwrap();
 
         let legacy_meetings = Path::new(&dir).join("meetings");
@@ -1974,7 +2370,7 @@ mod tests {
         assert!(!legacy.exists());
         assert!(!legacy_meetings.exists());
         assert!(existing.exists());
-        let migrated = target_meetings.join("meeting-migrated-1.md");
+        let migrated = notes_dir.join("meeting-migrated-1.md");
         assert!(migrated.exists());
 
         fs::remove_dir_all(&dir).ok();

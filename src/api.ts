@@ -14,6 +14,7 @@ export interface NoteContent {
   path: string;
   title: string;
   content: string;
+  transcript?: string | null;
   tags: string[];
   created: string;
   modified: string;
@@ -95,6 +96,7 @@ export async function getNote(id: string): Promise<NoteContent> {
     path: note.meta.path,
     title: note.meta.title,
     content: note.content,
+    transcript: null,
     tags: note.meta.tags,
     created: note.meta.created,
     modified: note.meta.modified,

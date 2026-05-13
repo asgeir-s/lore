@@ -683,6 +683,7 @@ async fn stage_managed_paths(dir: &Path) {
     let _ = git(dir, &["add", "-A", "notes"]).await;
     let _ = git(dir, &["add", "-A", "pinned"]).await;
     let _ = git(dir, &["add", "-A", "inbox"]).await;
+    let _ = git(dir, &["add", "-A", "transcripts"]).await;
     let _ = git(dir, &["add", INDEX_FILE]).await;
     let _ = git(dir, &["add", RELATED_CACHE_FILE]).await;
 }
@@ -693,6 +694,7 @@ fn ensure_gitignore_rules(dir: &Path) -> Result<bool, String> {
         ".DS_Store",
         "*.swp",
         "*.tmp",
+        ".recordings/",
         "notes/meetings/.audio/",
     ];
 
@@ -1008,6 +1010,7 @@ mod tests {
 
         let content = std::fs::read_to_string(&gitignore).unwrap();
         assert!(content.contains(".lore-index.json\n"));
+        assert!(content.contains(".recordings/\n"));
         assert!(content.contains("notes/meetings/.audio/\n"));
 
         std::fs::remove_dir_all(dir).ok();
@@ -1024,6 +1027,7 @@ mod tests {
 
         let content = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
         assert!(content.contains(".lore-index.json\n"));
+        assert!(content.contains(".recordings/\n"));
         assert!(content.contains("notes/meetings/.audio/\n"));
 
         std::fs::remove_dir_all(dir).ok();

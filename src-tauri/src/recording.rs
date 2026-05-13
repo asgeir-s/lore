@@ -107,11 +107,14 @@ impl AudioImportMode {
 
 impl RecordingJob {
     fn job_path(notes_dir: &str, note_id: &str) -> PathBuf {
-        crate::notes::meeting_audio_dir(notes_dir).join(format!("{note_id}.job.json"))
+        crate::notes::recording_jobs_dir(notes_dir).join(format!("{note_id}.job.json"))
     }
 
     pub fn save(&self) -> Result<(), String> {
         let path = Self::job_path(&self.notes_dir, &self.note_id);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("create job dir: {e}"))?;
+        }
         let tmp = path.with_extension("tmp");
         let json = serde_json::to_string_pretty(self).map_err(|e| format!("serialize job: {e}"))?;
         std::fs::write(&tmp, &json).map_err(|e| format!("write job tmp: {e}"))?;
@@ -125,19 +128,47 @@ impl RecordingJob {
     }
 
     pub fn scan(notes_dir: &str) -> Vec<RecordingJob> {
-        let pattern = crate::notes::meeting_audio_dir(notes_dir)
-            .join("*.job.json")
-            .to_string_lossy()
-            .to_string();
         let mut jobs = Vec::new();
-        for entry in glob::glob(&pattern).into_iter().flatten().flatten() {
-            if let Ok(json) = std::fs::read_to_string(&entry) {
-                if let Ok(job) = serde_json::from_str::<RecordingJob>(&json) {
-                    jobs.push(job);
+        let dirs = [
+            crate::notes::recording_jobs_dir(notes_dir),
+            crate::notes::legacy_meeting_audio_dir(notes_dir),
+        ];
+        for dir in dirs {
+            let pattern = dir.join("*.job.json").to_string_lossy().to_string();
+            for entry in glob::glob(&pattern).into_iter().flatten().flatten() {
+                if let Ok(json) = std::fs::read_to_string(&entry) {
+                    if let Ok(mut job) = serde_json::from_str::<RecordingJob>(&json) {
+                        job.normalize_recording_paths();
+                        jobs.push(job);
+                    }
                 }
             }
         }
         jobs
+    }
+
+    fn normalize_recording_paths(&mut self) {
+        self.mic_path = migrated_recording_path(&self.notes_dir, &self.mic_path);
+        self.system_path = migrated_recording_path(&self.notes_dir, &self.system_path);
+        self.final_wav_path = migrated_recording_path(&self.notes_dir, &self.final_wav_path);
+    }
+}
+
+fn migrated_recording_path(notes_dir: &str, path: &str) -> String {
+    if path.is_empty() || Path::new(path).exists() {
+        return path.to_string();
+    }
+
+    let legacy_dir = crate::notes::legacy_meeting_audio_dir(notes_dir);
+    let Ok(rel) = Path::new(path).strip_prefix(&legacy_dir) else {
+        return path.to_string();
+    };
+
+    let migrated = crate::notes::meeting_audio_dir(notes_dir).join(rel);
+    if migrated.exists() {
+        migrated.to_string_lossy().to_string()
+    } else {
+        path.to_string()
     }
 }
 
@@ -1166,7 +1197,7 @@ async fn process_recording(
                         &job.notes_dir,
                         &job.note_id,
                         &format!(
-                            "Transcription failed. Audio saved at `notes/meetings/.audio/{}.wav`.",
+                            "Transcription failed. Audio saved at `.recordings/audio/{}.wav`.",
                             job.note_id
                         ),
                     )
@@ -1866,18 +1897,30 @@ async fn create_recording_note(
         merge_tags(&["meeting"], import_tags)
     };
     let tag_lines = yaml_list_lines(&tags);
+    let transcript_path =
+        match crate::notes::write_meeting_transcript_file(notes_dir, note_id, transcript) {
+            Ok(path) => path,
+            Err(e) => {
+                eprintln!("recording: failed to write transcript sidecar: {e}");
+                let _ = app_handle.emit(
+                    "recording-error",
+                    format!("Failed to write transcript: {e}"),
+                );
+                return;
+            }
+        };
 
     let frontmatter = format!(
-        "---\nid: {note_id}\ncreated: {created}\nmodified: {created}\ntags:\n{tag_lines}type: {note_type}\naudio_path: notes/meetings/.audio/{note_id}.wav\n---\n"
+        "---\nid: {note_id}\ncreated: {created}\nmodified: {created}\ntags:\n{tag_lines}type: {note_type}\naudio_path: .recordings/audio/{note_id}.wav\ntranscript_path: {transcript_path}\n---\n"
     );
 
-    let body = format!("# {title}\n\n## Summary\n\n{summary}\n\n## Transcript\n\n{transcript}\n");
+    let body = format!("# {title}\n\n## Summary\n\n{}\n", summary.trim_end());
 
     let full_content = format!("{frontmatter}{body}");
 
-    // Ensure notes/meetings/ directory exists.
-    let meetings_dir = crate::notes::meetings_dir(notes_dir);
-    let _ = std::fs::create_dir_all(&meetings_dir);
+    // Meeting recordings are normal notes; raw artifacts live outside the notes collection.
+    let notes_collection_dir = crate::notes::notes_collection_dir(notes_dir);
+    let _ = std::fs::create_dir_all(&notes_collection_dir);
 
     let filename_kind = if imported_voice_memo {
         "voice-memo"
@@ -1885,13 +1928,13 @@ async fn create_recording_note(
         "meeting"
     };
     let mut filename = format!("{timestamp}-{filename_kind}.md");
-    let mut file_path = meetings_dir.join(&filename);
+    let mut file_path = notes_collection_dir.join(&filename);
     if file_path.exists() {
         let short_id = note_id.chars().take(8).collect::<String>();
         filename = format!("{timestamp}-{short_id}-{filename_kind}.md");
-        file_path = meetings_dir.join(&filename);
+        file_path = notes_collection_dir.join(&filename);
     }
-    let rel_path = format!("notes/meetings/{filename}");
+    let rel_path = format!("notes/{filename}");
 
     if let Err(e) = std::fs::write(&file_path, &full_content) {
         eprintln!("recording: failed to write recording note: {e}");
@@ -1983,18 +2026,16 @@ async fn create_error_note(
         "---\nid: {note_id}\ncreated: {created}\nmodified: {created}\ntags:\n  - meeting\ntype: meeting\n---\n"
     );
 
-    let body = format!(
-        "# Meeting {date_display}\n\n## Summary\n\n{error_message}\n\n## Transcript\n\n*Processing failed.*\n"
-    );
+    let body = format!("# Meeting {date_display}\n\n## Summary\n\n{error_message}\n");
 
     let full_content = format!("{frontmatter}{body}");
 
-    let meetings_dir = crate::notes::meetings_dir(notes_dir);
-    let _ = std::fs::create_dir_all(&meetings_dir);
+    let notes_collection_dir = crate::notes::notes_collection_dir(notes_dir);
+    let _ = std::fs::create_dir_all(&notes_collection_dir);
 
     let filename = format!("{timestamp}-meeting.md");
-    let file_path = meetings_dir.join(&filename);
-    let rel_path = format!("notes/meetings/{filename}");
+    let file_path = notes_collection_dir.join(&filename);
+    let rel_path = format!("notes/{filename}");
 
     if let Err(e) = std::fs::write(&file_path, &full_content) {
         eprintln!("recording: failed to write error note: {e}");

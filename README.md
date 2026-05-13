@@ -178,7 +178,7 @@ Why this exists:
 
 ## Meeting Recording
 
-Record meetings directly in the app, then get an auto-generated note with a summary and full transcript.
+Record meetings directly in the app, then get an auto-generated note with a summary and linked transcript.
 
 1. Press `Cmd+Shift+R` (or click Record) to start
 2. Press again to stop — the app processes the audio automatically:
@@ -187,7 +187,7 @@ Record meetings directly in the app, then get an auto-generated note with a summ
    - **ollama** summarizes the transcript into key points
 3. A meeting note appears with a Summary/Transcript toggle view
 
-Meeting notes live in `notes/meetings/`. Audio files are in `notes/meetings/.audio/` (git-ignored).
+Meeting notes are regular notes in `notes/`. Audio files are stored in `.recordings/audio/` (git-ignored). Raw transcripts are stored as sidecar files in `transcripts/` and linked from meeting-note frontmatter so QMD indexes the notes and summaries without indexing full transcripts.
 
 You can also drag audio files, including `.m4a` recordings from Apple Voice Memos, directly into Lore. Drop audio on the Meetings target for the Summary/Transcript workflow, or on the Notes target for a plain transcription without timestamps. Before import starts, you can add a title and tags or skip that step to keep the automatic title/tags.
 
