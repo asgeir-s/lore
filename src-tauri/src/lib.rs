@@ -1,5 +1,6 @@
 mod git_sync;
 mod notes;
+mod ollama;
 mod qmd;
 mod recording;
 
@@ -732,70 +733,9 @@ fn set_model_settings(state: State<AppState>, settings: ModelSettings) -> Result
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct OllamaModelInfo {
-    pub name: String,
-    pub size_bytes: Option<u64>,
-    pub installed: bool,
-    pub parameter_size: Option<String>,
-}
-
 #[tauri::command]
-async fn list_ollama_models() -> Result<Vec<OllamaModelInfo>, String> {
-    let mut models: Vec<OllamaModelInfo> = Vec::new();
-    let mut installed_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    // Query ollama REST API for installed models.
-    if let Ok(resp) = reqwest::get("http://localhost:11434/api/tags").await {
-        if let Ok(json) = resp.json::<serde_json::Value>().await {
-            if let Some(arr) = json.get("models").and_then(|v| v.as_array()) {
-                for m in arr {
-                    let name = m
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let size = m.get("size").and_then(|v| v.as_u64());
-                    let param_size = m
-                        .get("details")
-                        .and_then(|d| d.get("parameter_size"))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    if !name.is_empty() {
-                        installed_names.insert(name.clone());
-                        models.push(OllamaModelInfo {
-                            name,
-                            size_bytes: size,
-                            installed: true,
-                            parameter_size: param_size,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    // Add recommended models that aren't installed.
-    let recommended = [
-        ("llama3.2", "2.0B", 2_000_000_000u64),
-        ("mistral", "7.2B", 4_100_000_000),
-        ("qwen2.5:7b", "7.6B", 4_700_000_000),
-        ("qwen2.5:1.5b", "1.5B", 986_000_000),
-        ("gemma2:2b", "2.6B", 1_600_000_000),
-        ("phi3:mini", "3.8B", 2_300_000_000),
-    ];
-    for (name, param, approx_size) in recommended {
-        if !installed_names.contains(name) {
-            models.push(OllamaModelInfo {
-                name: name.to_string(),
-                size_bytes: Some(approx_size),
-                installed: false,
-                parameter_size: Some(param.to_string()),
-            });
-        }
-    }
-
-    Ok(models)
+async fn list_ollama_models() -> Result<Vec<ollama::OllamaModelInfo>, String> {
+    Ok(ollama::list_model_options().await)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -858,9 +798,11 @@ struct OllamaPullProgress {
 async fn pull_ollama_model(app_handle: tauri::AppHandle, name: String) -> Result<(), String> {
     use futures_util::StreamExt;
 
+    ollama::ensure_ollama_running().await?;
+
     let client = reqwest::Client::new();
     let resp = client
-        .post("http://localhost:11434/api/pull")
+        .post(ollama::api_url("/api/pull"))
         .json(&serde_json::json!({ "name": &name }))
         .send()
         .await

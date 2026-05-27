@@ -763,33 +763,7 @@ fn strip_frontmatter(content: &str) -> &str {
 const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5:1.5b";
 
 async fn ollama_available(model: &str) -> bool {
-    // Check if ollama binary exists.
-    if cmd("ollama").arg("--version").output().await.is_err() {
-        return false;
-    }
-
-    // Check if model is available (also tests if server is running).
-    if let Ok(o) = cmd("ollama").args(["show", model]).output().await {
-        if o.status.success() {
-            return true;
-        }
-        // Server might not be running — try starting it.
-        let stderr = String::from_utf8_lossy(&o.stderr);
-        if stderr.contains("could not connect") {
-            eprintln!("qmd: starting ollama serve...");
-            let _ = cmd("ollama").arg("serve").spawn();
-            // Give it a moment to start.
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            // Retry.
-            return cmd("ollama")
-                .args(["show", model])
-                .output()
-                .await
-                .map(|o| o.status.success())
-                .unwrap_or(false);
-        }
-    }
-    false
+    crate::ollama::model_available(model).await
 }
 
 async fn ollama_extract_keywords(text: &str, model: &str) -> Option<String> {
@@ -800,18 +774,13 @@ async fn ollama_extract_keywords(text: &str, model: &str) -> Option<String> {
         "What is this text about? Reply with exactly 5 topic words separated by commas. No explanation, no formatting.\n\n{}",
         text
     );
-    let output = cmd("ollama")
-        .args(["run", model, &prompt])
-        .output()
-        .await
-        .ok()?;
-
-    if !output.status.success() {
-        eprintln!("qmd: ollama failed");
-        return None;
-    }
-
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let raw = match crate::ollama::generate(model, &prompt).await {
+        Ok(raw) => raw.trim().to_string(),
+        Err(err) => {
+            eprintln!("qmd: ollama failed: {err}");
+            return None;
+        }
+    };
     // Strip markdown bold/italic and take only the first line.
     let result: String = raw
         .lines()

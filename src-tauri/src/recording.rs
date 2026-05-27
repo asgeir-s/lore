@@ -1772,13 +1772,18 @@ fn format_timestamp(ts: &str) -> String {
 // ── Summarization ───────────────────────────────────────────────────
 
 async fn find_ollama_model(override_model: Option<&str>) -> Option<String> {
+    let models = match crate::ollama::installed_models().await {
+        Ok(models) => models,
+        Err(err) => {
+            eprintln!("recording: ollama unavailable: {err}");
+            return None;
+        }
+    };
+
     // If user selected a specific model, verify it exists.
     if let Some(name) = override_model {
-        let out = cmd("ollama").args(["show", name]).output().await;
-        if let Ok(o) = out {
-            if o.status.success() {
-                return Some(name.to_string());
-            }
+        if let Some(model) = crate::ollama::find_model_name(&models, name) {
+            return Some(model);
         }
         eprintln!(
             "recording: configured summary model '{name}' not available, falling back to auto"
@@ -1786,15 +1791,7 @@ async fn find_ollama_model(override_model: Option<&str>) -> Option<String> {
     }
 
     let candidates = ["llama3.2", "mistral", "qwen2.5:7b", "qwen2.5:1.5b"];
-    for model in &candidates {
-        let out = cmd("ollama").args(["show", model]).output().await;
-        if let Ok(o) = out {
-            if o.status.success() {
-                return Some(model.to_string());
-            }
-        }
-    }
-    None
+    crate::ollama::first_matching_model_name(&models, &candidates)
 }
 
 pub async fn summarize(
@@ -1837,20 +1834,10 @@ pub async fn summarize(
         )
     };
 
-    let out = cmd("ollama")
-        .args(["run", &model, &prompt])
-        .output()
-        .await
-        .map_err(|e| format!("ollama failed to start: {e}"))?;
-
-    if !out.status.success() {
-        return Err(format!(
-            "ollama failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
-    }
-
-    let summary = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let summary = crate::ollama::generate(&model, &prompt)
+        .await?
+        .trim()
+        .to_string();
     if summary.is_empty() {
         Err("ollama returned empty output".to_string())
     } else {
