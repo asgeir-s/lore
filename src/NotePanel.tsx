@@ -78,6 +78,101 @@ interface NotePanelProps {
   onBgJob?: (key: string, label: string | null, noteId?: string) => void;
 }
 
+interface NoteViewTab {
+  id: string;
+  label: string;
+  normalizedLabel: string;
+  content: string;
+}
+
+function normalizeTabLabel(label: string): string {
+  return label.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function tabIdFromLabel(label: string, used: Set<string>): string {
+  const normalized = normalizeTabLabel(label);
+  const base =
+    normalized.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") ||
+    "section";
+  let id = base;
+  let suffix = 2;
+  while (used.has(id)) {
+    id = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  used.add(id);
+  return id;
+}
+
+function fenceMarker(line: string): string | null {
+  const match = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+  return match?.[1] ?? null;
+}
+
+function parseTopLevelHeadingTabs(content: string): NoteViewTab[] {
+  const lines = content.split("\n");
+  const headings: Array<{ lineIndex: number; label: string }> = [];
+  let activeFence: { char: string; length: number } | null = null;
+
+  lines.forEach((line, lineIndex) => {
+    const marker = fenceMarker(line);
+    if (activeFence) {
+      if (
+        marker &&
+        marker[0] === activeFence.char &&
+        marker.length >= activeFence.length
+      ) {
+        activeFence = null;
+      }
+      return;
+    }
+
+    if (marker) {
+      activeFence = {
+        char: marker[0],
+        length: marker.length,
+      };
+      return;
+    }
+
+    const headingMatch = line.match(/^[ \t]{0,3}#[ \t]+(.+)$/);
+    if (!headingMatch) return;
+    const label = headingMatch[1].replace(/[ \t]+#+[ \t]*$/, "").trim();
+    if (label) {
+      headings.push({ lineIndex, label });
+    }
+  });
+
+  if (headings.length === 0) return [];
+
+  const usedIds = new Set<string>();
+  const tabs: NoteViewTab[] = [];
+  const leadingContent = lines.slice(0, headings[0].lineIndex).join("\n").trim();
+  if (leadingContent.length > 0) {
+    usedIds.add("notes");
+    tabs.push({
+      id: "notes",
+      label: "Notes",
+      normalizedLabel: "notes",
+      content: leadingContent,
+    });
+  }
+
+  headings.forEach((heading, index) => {
+    const nextHeading = headings[index + 1];
+    const contentStart = heading.lineIndex + 1;
+    const contentEnd = nextHeading?.lineIndex ?? lines.length;
+    tabs.push({
+      id: tabIdFromLabel(heading.label, usedIds),
+      label: heading.label,
+      normalizedLabel: normalizeTabLabel(heading.label),
+      content: lines.slice(contentStart, contentEnd).join("\n").trim(),
+    });
+  });
+
+  return tabs;
+}
+
 interface LocalDraft {
   version: 1;
   sourceKey: string;
@@ -212,6 +307,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     const [meetingTranscript, setMeetingTranscript] = useState<string | null>(
       null,
     );
+    const [meetingHasAudio, setMeetingHasAudio] = useState(false);
     const [title, setTitle] = useState("");
     const [loadedNoteId, setLoadedNoteId] = useState<string | null>(null);
     const [tags, setTags] = useState<string[]>([]);
@@ -223,9 +319,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     const [retranscribingNote, setRetranscribingNote] = useState(false);
     const [resummarizingNote, setResummarizingNote] = useState(false);
     const [relatedLoading, setRelatedLoading] = useState(false);
-    const [meetingView, setMeetingView] = useState<
-      "notes" | "summary" | "transcript"
-    >("notes");
+    const [selectedTabId, setSelectedTabId] = useState("notes");
     const [userModified, setUserModified] = useState(independent ?? false);
     const [highlightIndex, setHighlightIndex] = useState(-1);
     const [pinned, setPinned] = useState(false);
@@ -341,6 +435,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           const note = await getNote(noteId);
           setContent(note.content);
           setMeetingTranscript(note.transcript ?? null);
+          setMeetingHasAudio(note.has_audio ?? false);
           contentRef.current = note.content;
           setTitle(note.title);
           titleRef.current = note.title;
@@ -373,6 +468,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       clearLocalDraft();
       setContent("");
       setMeetingTranscript(null);
+      setMeetingHasAudio(false);
       contentRef.current = "";
       setTitle("");
       titleRef.current = "";
@@ -684,6 +780,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             const note = await getNote(noteIdNow);
             setContent(note.content);
             setMeetingTranscript(note.transcript ?? null);
+            setMeetingHasAudio(note.has_audio ?? false);
             contentRef.current = note.content;
             setTitle(meta.title);
             titleRef.current = meta.title;
@@ -777,6 +874,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
               savedTitleRef.current = note.title;
               savedTagsRef.current = note.tags;
               setMeetingTranscript(note.transcript ?? null);
+              setMeetingHasAudio(note.has_audio ?? false);
               setPinned(isPinnedNotePath(note.path));
             } else {
               setLoadedNoteId(null);
@@ -785,6 +883,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
               savedTitleRef.current = "";
               savedTagsRef.current = [];
               setMeetingTranscript(null);
+              setMeetingHasAudio(false);
               setPinned(false);
             }
 
@@ -988,9 +1087,10 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         const noteContent = await getNote(loadedNoteId);
         setContent(noteContent.content);
         setMeetingTranscript(noteContent.transcript ?? null);
+        setMeetingHasAudio(noteContent.has_audio ?? false);
         contentRef.current = noteContent.content;
         savedContentRef.current = noteContent.content;
-        setMeetingView("transcript");
+        setSelectedTabId("transcript");
         await onSaved();
       } catch (e) {
         console.error("Failed to retranscribe:", e);
@@ -1010,9 +1110,10 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         const noteContent = await getNote(loadedNoteId);
         setContent(noteContent.content);
         setMeetingTranscript(noteContent.transcript ?? null);
+        setMeetingHasAudio(noteContent.has_audio ?? false);
         contentRef.current = noteContent.content;
         savedContentRef.current = noteContent.content;
-        setMeetingView("summary");
+        setSelectedTabId("summary");
         await onSaved();
       } catch (e) {
         console.error("Failed to resummarize:", e);
@@ -1184,54 +1285,73 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         </div>
         {!editing &&
           (() => {
-            const inlineTranscriptMatch = content.match(
-              /## Transcript\n+([\s\S]*?)$/,
-            );
-            const transcriptContent =
-              meetingTranscript ?? inlineTranscriptMatch?.[1]?.trim() ?? "";
-            const hasSummary =
-              content.includes("## Summary") && transcriptContent.length > 0;
-            if (hasSummary) {
-              const summaryMatch = content.match(
-                /## Summary\n+([\s\S]*?)(?=\n## Transcript|\n## [^\n]+|$)/,
-              );
-              const summaryContent = summaryMatch ? summaryMatch[1].trim() : "";
-              // Everything before ## Summary is the user's notes
-              const notesContent = content.split(/\n## Summary/)[0].trim();
-              const hasNotes =
-                notesContent.replace(/^#\s+.*$/m, "").trim().length > 0;
+            const isRecordingNote =
+              tags.includes("meeting") || tags.includes("voice-memo");
+            // Only meeting notes are laid out as separate Summary/Transcript
+            // sections. Plain voice memos store their transcript inline in the
+            // body, so they must NOT get a synthetic Transcript tab.
+            const isMeetingNote = tags.includes("meeting");
+            const tabs = parseTopLevelHeadingTabs(content);
+            // A meeting note whose audio is still on disk should always offer a
+            // Transcript tab — even when the note has no `# Transcript` section
+            // yet (e.g. transcription failed). It's the only entry point for
+            // re-running transcription.
+            if (
+              isMeetingNote &&
+              meetingHasAudio &&
+              tabs.length > 0 &&
+              !tabs.some(
+                (tab) =>
+                  tab.normalizedLabel === "transcript" ||
+                  tab.id === "transcript",
+              )
+            ) {
+              tabs.push({
+                id: "transcript",
+                label: "Transcript",
+                normalizedLabel: "transcript",
+                content: "",
+              });
+            }
+            if (tabs.length > 0) {
+              const activeTab =
+                tabs.find((tab) => tab.id === selectedTabId) ?? tabs[0];
+              const transcriptContent = meetingTranscript?.trim() ?? "";
               const viewContent =
-                meetingView === "notes"
-                  ? notesContent
-                  : meetingView === "summary"
-                    ? summaryContent
-                    : transcriptContent;
+                activeTab.normalizedLabel === "transcript" && transcriptContent
+                  ? transcriptContent
+                  : activeTab.content;
+              const canResummarize =
+                activeTab.normalizedLabel === "summary" &&
+                isRecordingNote &&
+                transcriptContent.length > 0;
+              const canRetranscribe =
+                activeTab.normalizedLabel === "transcript" &&
+                isRecordingNote &&
+                meetingHasAudio;
+              const showTranscriptEmptyState =
+                isRecordingNote &&
+                activeTab.normalizedLabel === "transcript" &&
+                viewContent.trim().length === 0;
               return (
                 <>
                   <div className="meeting-view-toggle">
-                    {hasNotes && (
+                    {tabs.map((tab) => (
                       <button
-                        className={meetingView === "notes" ? "active" : ""}
-                        onClick={() => setMeetingView("notes")}
+                        key={tab.id}
+                        className={activeTab.id === tab.id ? "active" : ""}
+                        onClick={() => setSelectedTabId(tab.id)}
                       >
-                        Notes
+                        {tab.label}
                       </button>
-                    )}
-                    <button
-                      className={meetingView === "summary" ? "active" : ""}
-                      onClick={() => setMeetingView("summary")}
-                    >
-                      Summary
-                    </button>
-                    <button
-                      className={meetingView === "transcript" ? "active" : ""}
-                      onClick={() => setMeetingView("transcript")}
-                    >
-                      Transcript
-                    </button>
+                    ))}
                   </div>
-                  <div className="meeting-content-wrapper">
-                    {meetingView === "summary" && (
+                  <div
+                    className={`meeting-content-wrapper${
+                      showTranscriptEmptyState ? " transcript-empty" : ""
+                    }`}
+                  >
+                    {canResummarize && (
                       <button
                         className="meeting-regen-btn"
                         onClick={() => void handleResummarizeNote()}
@@ -1244,7 +1364,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
                         )}
                       </button>
                     )}
-                    {meetingView === "transcript" && (
+                    {canRetranscribe && (
                       <button
                         className="meeting-regen-btn"
                         onClick={() => void handleRetranscribeNote()}
@@ -1257,11 +1377,21 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
                         )}
                       </button>
                     )}
-                    <MarkdownView
-                      content={viewContent}
-                      onEdit={handleEdit}
-                      onNoteNavigate={onNoteNavigate}
-                    />
+                    {showTranscriptEmptyState ? (
+                      <p className="transcript-empty-hint">
+                        {retranscribingNote
+                          ? "Transcribing from the saved audio…"
+                          : canRetranscribe
+                            ? "No transcript yet. Click ↻ to transcribe from the saved audio."
+                            : "No transcript available — the audio file for this note is no longer on disk."}
+                      </p>
+                    ) : (
+                      <MarkdownView
+                        content={viewContent}
+                        onEdit={handleEdit}
+                        onNoteNavigate={onNoteNavigate}
+                      />
+                    )}
                   </div>
                 </>
               );

@@ -27,6 +27,9 @@ pub struct NoteContent {
     pub tags: Vec<String>,
     pub created: String,
     pub modified: String,
+    /// True when a recording audio file still exists on disk for this note,
+    /// meaning transcription can be (re-)run from it.
+    pub has_audio: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -409,43 +412,130 @@ pub fn write_meeting_transcript_file(
 }
 
 fn split_inline_transcript(body: &str) -> (String, Option<String>) {
-    let marker = "## Transcript";
-    let Some(pos) = body.find(marker) else {
+    let Some((section_start, content_start, section_end)) =
+        find_top_level_section(body, "# Transcript")
+    else {
         return (body.to_string(), None);
     };
-    let before = body[..pos].trim_end().to_string();
-    let after = body[pos + marker.len()..]
+
+    let before = body[..section_start].trim_end();
+    let suffix = body[section_end..].trim_start_matches('\n');
+    let transcript = body[content_start..section_end]
         .trim_start_matches('\n')
         .trim_end()
         .to_string();
-    let mut stripped = before;
-    if !stripped.is_empty() {
+
+    let mut stripped = before.to_string();
+    if !suffix.trim().is_empty() {
+        if !stripped.is_empty() {
+            stripped.push_str("\n\n");
+        }
+        stripped.push_str(suffix);
+    } else if !stripped.is_empty() {
         stripped.push('\n');
     }
-    (stripped, Some(after))
+    (stripped, Some(transcript))
 }
 
 fn replace_summary_section(body: &str, summary: &str) -> io::Result<String> {
-    let summary_header = "## Summary";
-    let sum_pos = body
-        .find(summary_header)
+    let summary_header = "# Summary";
+    let (section_start, _, section_end) = find_top_level_section(body, summary_header)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No summary section found"))?;
-    let after_header_start = sum_pos + summary_header.len();
-    let after_header = &body[after_header_start..];
-    let suffix = after_header.find("\n## ").map(|pos| &after_header[pos..]);
+    let suffix = body[section_end..].trim_start_matches('\n');
 
-    let mut new_body = format!("{}## Summary\n\n{}\n", &body[..sum_pos], summary.trim_end());
-    if let Some(suffix) = suffix {
-        let suffix = suffix.trim_start_matches('\n');
-        if !suffix.trim().is_empty() {
+    let mut new_body = format!(
+        "{}# Summary\n\n{}\n",
+        &body[..section_start],
+        summary.trim_end()
+    );
+    if !suffix.trim().is_empty() {
+        new_body.push('\n');
+        new_body.push_str(suffix);
+        if !new_body.ends_with('\n') {
             new_body.push('\n');
-            new_body.push_str(suffix);
-            if !new_body.ends_with('\n') {
-                new_body.push('\n');
-            }
         }
     }
     Ok(new_body)
+}
+
+fn ensure_transcript_marker(body: String) -> String {
+    if find_top_level_section(&body, "# Transcript").is_some() {
+        return body;
+    }
+
+    let trimmed = body.trim_end();
+    if trimmed.is_empty() {
+        "# Transcript\n".to_string()
+    } else {
+        format!("{trimmed}\n\n# Transcript\n")
+    }
+}
+
+fn append_summary_section(body: &str, summary: &str) -> String {
+    let trimmed = body.trim_end();
+    let separator = if trimmed.is_empty() { "" } else { "\n\n" };
+    format!("{trimmed}{separator}# Summary\n\n{}\n", summary.trim_end())
+}
+
+fn find_top_level_section(body: &str, header: &str) -> Option<(usize, usize, usize)> {
+    let mut active_fence: Option<(char, usize)> = None;
+    let mut section: Option<(usize, usize)> = None;
+    let mut offset = 0;
+
+    for raw_line in body.split_inclusive('\n') {
+        let line = raw_line.trim_end_matches(|ch| ch == '\r' || ch == '\n');
+
+        if active_fence.is_none() {
+            let trimmed = line.trim();
+            if let Some((section_start, content_start)) = section {
+                if is_top_level_heading_line(trimmed) {
+                    return Some((section_start, content_start, offset));
+                }
+            } else if trimmed == header {
+                section = Some((offset, offset + raw_line.len()));
+            }
+        }
+
+        update_markdown_fence(&mut active_fence, line);
+        offset += raw_line.len();
+    }
+
+    section.map(|(section_start, content_start)| (section_start, content_start, body.len()))
+}
+
+fn is_top_level_heading_line(trimmed_line: &str) -> bool {
+    trimmed_line.starts_with("# ") || trimmed_line.starts_with("#\t")
+}
+
+fn update_markdown_fence(active_fence: &mut Option<(char, usize)>, line: &str) {
+    let Some((marker_char, marker_len)) = markdown_fence_marker(line) else {
+        return;
+    };
+
+    match active_fence {
+        Some((active_char, active_len))
+            if marker_char == *active_char && marker_len >= *active_len =>
+        {
+            *active_fence = None;
+        }
+        Some(_) => {}
+        None => {
+            *active_fence = Some((marker_char, marker_len));
+        }
+    }
+}
+
+fn markdown_fence_marker(line: &str) -> Option<(char, usize)> {
+    let trimmed = line.trim_start();
+    let backtick_count = trimmed.chars().take_while(|ch| *ch == '`').count();
+    if backtick_count >= 3 {
+        return Some(('`', backtick_count));
+    }
+    let tilde_count = trimmed.chars().take_while(|ch| *ch == '~').count();
+    if tilde_count >= 3 {
+        return Some(('~', tilde_count));
+    }
+    None
 }
 
 fn read_note_transcript_from_parts(
@@ -501,6 +591,7 @@ fn ensure_transcript_sidecar(
 
     let transcript_path = write_meeting_transcript_file(notes_dir, id, &transcript)?;
     set_yaml_string(raw_yaml, "transcript_path", &transcript_path);
+    let body_without_transcript = ensure_transcript_marker(body_without_transcript);
     let frontmatter = serialize_frontmatter(raw_yaml);
     fs::write(file_path, format!("{frontmatter}{body_without_transcript}"))?;
     Ok(body_without_transcript)
@@ -774,16 +865,12 @@ pub fn append_meeting_data(
     set_yaml_string(&mut raw_yaml, "transcript_path", &transcript_path);
 
     let (body_without_transcript, _) = split_inline_transcript(&body);
-    let has_summary = body_without_transcript
-        .lines()
-        .any(|line| line.trim() == "## Summary");
-    let content = if has_summary {
+    let content = if find_top_level_section(&body_without_transcript, "# Summary").is_some() {
         body_without_transcript
     } else {
-        let trimmed = body_without_transcript.trim_end();
-        let separator = if trimmed.is_empty() { "" } else { "\n\n" };
-        format!("{trimmed}{separator}## Summary\n\n{}\n", summary.trim_end())
+        append_summary_section(&body_without_transcript, summary)
     };
+    let content = ensure_transcript_marker(content);
 
     // Keep user-defined titles. Replace only known auto-generated placeholders.
     let title = if is_auto_meeting_title(&meta.title) {
@@ -882,7 +969,7 @@ pub fn get_note_transcript(notes_dir: &str, id: &str, index: &NoteIndex) -> io::
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No transcript section found"))
 }
 
-/// Replace only the `## Transcript` section of a meeting note.
+/// Replace only the transcript sidecar for a meeting note.
 pub fn replace_meeting_transcript(
     notes_dir: &str,
     id: &str,
@@ -902,6 +989,7 @@ pub fn replace_meeting_transcript(
     let transcript_path = write_meeting_transcript_file(notes_dir, &meta.id, transcript)?;
     set_yaml_string(&mut raw_yaml, "transcript_path", &transcript_path);
     let (new_body, _) = split_inline_transcript(&body);
+    let new_body = ensure_transcript_marker(new_body);
 
     write_meeting_section(
         notes_dir,
@@ -913,7 +1001,7 @@ pub fn replace_meeting_transcript(
     )
 }
 
-/// Replace only the `## Summary` section of a meeting note.
+/// Replace only the `# Summary` section of a meeting note.
 pub fn replace_meeting_summary(
     notes_dir: &str,
     id: &str,
@@ -930,14 +1018,25 @@ pub fn replace_meeting_summary(
     let (raw_yaml, body) = parse_raw_yaml(&raw);
     let mut raw_yaml = raw_yaml.unwrap_or_default();
 
-    let (body_without_transcript, inline_transcript) = split_inline_transcript(&body);
-    if yaml_string(&raw_yaml, "transcript_path").is_none() {
+    let has_transcript_path = yaml_string(&raw_yaml, "transcript_path").is_some();
+    let (body_for_summary, should_ensure_transcript_marker) = if has_transcript_path {
+        (body, true)
+    } else {
+        let (body_without_transcript, inline_transcript) = split_inline_transcript(&body);
         if let Some(transcript) = inline_transcript {
             let transcript_path = write_meeting_transcript_file(notes_dir, &meta.id, &transcript)?;
             set_yaml_string(&mut raw_yaml, "transcript_path", &transcript_path);
+            (body_without_transcript, true)
+        } else {
+            (body_without_transcript, false)
         }
-    }
-    let new_body = replace_summary_section(&body_without_transcript, summary)?;
+    };
+    let new_body = replace_summary_section(&body_for_summary, summary)?;
+    let new_body = if should_ensure_transcript_marker {
+        ensure_transcript_marker(new_body)
+    } else {
+        new_body
+    };
 
     write_meeting_section(
         notes_dir,
@@ -1112,6 +1211,8 @@ pub fn get_note(notes_dir: &str, id: &str, index: &NoteIndex) -> io::Result<Note
     let (raw_yaml, body) = parse_raw_yaml(&raw);
     let transcript = read_note_transcript_from_parts(notes_dir, raw_yaml.as_ref(), None, &body)?;
 
+    let has_audio = recording_audio_path(notes_dir, id).exists();
+
     Ok(NoteContent {
         id: meta.id.clone(),
         path: meta.path.clone(),
@@ -1121,6 +1222,7 @@ pub fn get_note(notes_dir: &str, id: &str, index: &NoteIndex) -> io::Result<Note
         tags: meta.tags.clone(),
         created: meta.created.clone(),
         modified: meta.modified.clone(),
+        has_audio,
     })
 }
 
@@ -1933,7 +2035,8 @@ mod tests {
         let note_path = Path::new(&dir).join(&updated.path);
         let raw = fs::read_to_string(note_path).unwrap();
 
-        assert!(raw.contains("## Summary\n\nConcise summary"));
+        assert!(raw.contains("# Summary\n\nConcise summary"));
+        assert!(raw.contains("# Transcript"));
         assert!(raw.contains("transcript_path: transcripts/"));
         assert!(!raw.contains("## Transcript"));
         assert_eq!(
@@ -1953,6 +2056,24 @@ mod tests {
     }
 
     #[test]
+    fn test_replace_summary_section_preserves_internal_headings() {
+        let body = "# Summary\n\nOld summary\n\n## Hovedpunkter\n\n- Old point\n\n# Transcript\n";
+        let updated =
+            replace_summary_section(body, "New summary\n\n## Hovedpunkter\n\n- New point").unwrap();
+
+        assert!(updated.contains("# Summary\n\nNew summary"));
+        assert!(updated.contains("## Hovedpunkter\n\n- New point"));
+        assert!(updated.contains("\n# Transcript"));
+        assert!(!updated.contains("Old point"));
+    }
+
+    #[test]
+    fn test_replace_summary_section_ignores_legacy_h2_summary() {
+        let body = "## Summary\n\nOld summary\n";
+        assert!(replace_summary_section(body, "New summary").is_err());
+    }
+
+    #[test]
     fn test_rebuild_index_migrates_inline_transcript_to_root_sidecar() {
         let dir = setup_test_dir();
         let note_id = Uuid::new_v4().to_string();
@@ -1962,7 +2083,7 @@ mod tests {
         fs::write(
             &note_path,
             format!(
-                "---\nid: {note_id}\ncreated: 2026-01-01T00:00:00+00:00\nmodified: 2026-01-01T00:00:00+00:00\ntags:\n  - meeting\n---\n# Legacy Meeting\n\n## Summary\n\nOld summary\n\n## Transcript\n\nOld transcript\n"
+                "---\nid: {note_id}\ncreated: 2026-01-01T00:00:00+00:00\nmodified: 2026-01-01T00:00:00+00:00\ntags:\n  - meeting\n---\n# Legacy Meeting\n\n## Summary\n\nOld summary\n\n# Transcript\n\nOld transcript\n"
             ),
         )
         .unwrap();
@@ -1973,7 +2094,9 @@ mod tests {
         let migrated_path = Path::new(&dir).join("notes/legacy-meeting.md");
         let migrated = fs::read_to_string(&migrated_path).unwrap();
         assert!(migrated.contains("transcript_path: transcripts/"));
+        assert!(migrated.contains("# Transcript"));
         assert!(!migrated.contains("## Transcript"));
+        assert!(!migrated.contains("Old transcript"));
         assert_eq!(
             get_note_transcript(&dir, &note_id, &rebuilt)
                 .unwrap()

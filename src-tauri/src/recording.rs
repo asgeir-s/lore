@@ -1120,6 +1120,15 @@ fn yaml_list_lines(values: &[String]) -> String {
         .collect()
 }
 
+fn yaml_scalar_line(value: &str) -> String {
+    let single_line = value.replace(['\r', '\n'], " ");
+    let yaml = serde_yaml::to_string(&single_line).unwrap_or_else(|_| "''".to_string());
+    yaml.strip_prefix("---\n")
+        .unwrap_or(&yaml)
+        .trim_end()
+        .to_string()
+}
+
 async fn process_recording(
     app_handle: &tauri::AppHandle,
     job: &mut RecordingJob,
@@ -1824,25 +1833,74 @@ pub async fn summarize(
 
     let prompt = if is_norwegian {
         format!(
-            "Oppsummer dette transkriptet med hovedpunkter, beslutninger og oppgaver. Bruk markdown-formatering. Skriv kun på norsk.\n\n{}",
+            "Oppsummer dette transkriptet med hovedpunkter, beslutninger og oppgaver. Bruk markdown-formatering. Skriv kun på norsk. Ikke inkluder en tittel eller en '# Summary'/'# Oppsummering'-overskrift. Bruk bare '##' eller dypere overskrifter inne i sammendraget.\n\n{}",
             transcript
         )
     } else {
         format!(
-            "Summarize this transcript into key points, decisions, and action items. Use markdown formatting.\n\n{}",
+            "Summarize this transcript into key points, decisions, and action items. Use markdown formatting. Do not include a title or '# Summary' heading. Use only '##' or deeper headings inside the summary.\n\n{}",
             transcript
         )
     };
 
-    let summary = crate::ollama::generate(&model, &prompt)
-        .await?
-        .trim()
-        .to_string();
+    let summary = normalize_summary_markdown(
+        &crate::ollama::generate(&model, &prompt)
+            .await?
+            .trim()
+            .to_string(),
+    );
     if summary.is_empty() {
         Err("ollama returned empty output".to_string())
     } else {
         Ok(summary)
     }
+}
+
+fn normalize_summary_markdown(summary: &str) -> String {
+    let mut normalized = Vec::new();
+    let mut active_fence: Option<(char, usize)> = None;
+
+    for line in summary.lines() {
+        let marker = markdown_fence_marker(line);
+        let mut next_line = line.to_string();
+
+        if active_fence.is_none() {
+            let trimmed_start = line.trim_start();
+            if trimmed_start.starts_with("# ") || trimmed_start.starts_with("#\t") {
+                let indent_len = line.len() - trimmed_start.len();
+                next_line = format!("{}#{}", &line[..indent_len], trimmed_start);
+            }
+        }
+
+        if let Some((marker_char, marker_len)) = marker {
+            match active_fence {
+                Some((active_char, active_len))
+                    if marker_char == active_char && marker_len >= active_len =>
+                {
+                    active_fence = None;
+                }
+                Some(_) => {}
+                None => active_fence = Some((marker_char, marker_len)),
+            }
+        }
+
+        normalized.push(next_line);
+    }
+
+    normalized.join("\n").trim().to_string()
+}
+
+fn markdown_fence_marker(line: &str) -> Option<(char, usize)> {
+    let trimmed = line.trim_start();
+    let backtick_count = trimmed.chars().take_while(|ch| *ch == '`').count();
+    if backtick_count >= 3 {
+        return Some(('`', backtick_count));
+    }
+    let tilde_count = trimmed.chars().take_while(|ch| *ch == '~').count();
+    if tilde_count >= 3 {
+        return Some(('~', tilde_count));
+    }
+    None
 }
 
 // ── Note creation ───────────────────────────────────────────────────
@@ -1884,6 +1942,7 @@ async fn create_recording_note(
         merge_tags(&["meeting"], import_tags)
     };
     let tag_lines = yaml_list_lines(&tags);
+    let title_yaml = yaml_scalar_line(&title);
     let transcript_path =
         match crate::notes::write_meeting_transcript_file(notes_dir, note_id, transcript) {
             Ok(path) => path,
@@ -1898,10 +1957,10 @@ async fn create_recording_note(
         };
 
     let frontmatter = format!(
-        "---\nid: {note_id}\ncreated: {created}\nmodified: {created}\ntags:\n{tag_lines}type: {note_type}\naudio_path: .recordings/audio/{note_id}.wav\ntranscript_path: {transcript_path}\n---\n"
+        "---\nid: {note_id}\ntitle: {title_yaml}\ncreated: {created}\nmodified: {created}\ntags:\n{tag_lines}type: {note_type}\naudio_path: .recordings/audio/{note_id}.wav\ntranscript_path: {transcript_path}\n---\n"
     );
 
-    let body = format!("# {title}\n\n## Summary\n\n{}\n", summary.trim_end());
+    let body = format!("# Summary\n\n{}\n\n# Transcript\n", summary.trim_end());
 
     let full_content = format!("{frontmatter}{body}");
 
@@ -2008,12 +2067,14 @@ async fn create_error_note(
     let timestamp = now.format("%Y%m%d%H%M%S").to_string();
     let date_display = now.format("%Y-%m-%d %H:%M").to_string();
     let created = now.to_rfc3339();
+    let title = format!("Meeting {date_display}");
+    let title_yaml = yaml_scalar_line(&title);
 
     let frontmatter = format!(
-        "---\nid: {note_id}\ncreated: {created}\nmodified: {created}\ntags:\n  - meeting\ntype: meeting\n---\n"
+        "---\nid: {note_id}\ntitle: {title_yaml}\ncreated: {created}\nmodified: {created}\ntags:\n  - meeting\ntype: meeting\n---\n"
     );
 
-    let body = format!("# Meeting {date_display}\n\n## Summary\n\n{error_message}\n");
+    let body = format!("# Summary\n\n{error_message}\n");
 
     let full_content = format!("{frontmatter}{body}");
 
@@ -2033,7 +2094,7 @@ async fn create_error_note(
         let meta = crate::notes::NoteMetadata {
             id: note_id.to_string(),
             path: rel_path.clone(),
-            title: format!("Meeting {date_display}"),
+            title,
             created: created.clone(),
             modified: created,
             tags: vec!["meeting".to_string()],
@@ -2121,6 +2182,17 @@ mod tests {
     fn transcript_without_timestamps_removes_segment_prefixes() {
         let plain = transcript_without_timestamps("[00:00] First bit\n[01:12] Second bit");
         assert_eq!(plain, "First bit\nSecond bit");
+    }
+
+    #[test]
+    fn normalize_summary_markdown_demotes_top_level_headings() {
+        let summary = normalize_summary_markdown(
+            "# Summary\n\nText\n\n```\n# Not a heading\n```\n\n# Decisions",
+        );
+        assert_eq!(
+            summary,
+            "## Summary\n\nText\n\n```\n# Not a heading\n```\n\n## Decisions"
+        );
     }
 
     #[test]

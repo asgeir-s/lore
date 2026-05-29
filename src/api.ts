@@ -18,6 +18,8 @@ export interface NoteContent {
   tags: string[];
   created: string;
   modified: string;
+  /** True when a recording audio file still exists for this note. */
+  has_audio?: boolean;
 }
 
 export function isPinnedNotePath(path: string): boolean {
@@ -100,6 +102,7 @@ export async function getNote(id: string): Promise<NoteContent> {
     tags: note.meta.tags,
     created: note.meta.created,
     modified: note.meta.modified,
+    has_audio: false,
   };
 }
 

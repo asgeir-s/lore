@@ -1698,8 +1698,17 @@ body {
   transition: opacity 0.15s;
 }
 
-.meeting-content-wrapper:hover .meeting-regen-btn {
+.meeting-content-wrapper:hover .meeting-regen-btn,
+.meeting-content-wrapper.transcript-empty .meeting-regen-btn {
   opacity: 1;
+}
+
+.transcript-empty-hint {
+  margin: 0;
+  padding: 4px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-style: italic;
 }
 
 .meeting-regen-btn:hover {
