@@ -21,46 +21,6 @@ pub struct OllamaModelInfo {
     pub parameter_size: Option<String>,
 }
 
-#[derive(Clone, Copy)]
-struct RecommendedModel {
-    name: &'static str,
-    parameter_size: &'static str,
-    approx_size_bytes: u64,
-}
-
-const RECOMMENDED_MODELS: &[RecommendedModel] = &[
-    RecommendedModel {
-        name: "llama3.2",
-        parameter_size: "2.0B",
-        approx_size_bytes: 2_000_000_000,
-    },
-    RecommendedModel {
-        name: "mistral",
-        parameter_size: "7.2B",
-        approx_size_bytes: 4_100_000_000,
-    },
-    RecommendedModel {
-        name: "qwen2.5:7b",
-        parameter_size: "7.6B",
-        approx_size_bytes: 4_700_000_000,
-    },
-    RecommendedModel {
-        name: "qwen2.5:1.5b",
-        parameter_size: "1.5B",
-        approx_size_bytes: 986_000_000,
-    },
-    RecommendedModel {
-        name: "gemma2:2b",
-        parameter_size: "2.6B",
-        approx_size_bytes: 1_600_000_000,
-    },
-    RecommendedModel {
-        name: "phi3:mini",
-        parameter_size: "3.8B",
-        approx_size_bytes: 2_300_000_000,
-    },
-];
-
 #[derive(Debug, Deserialize)]
 struct TagsResponse {
     #[serde(default)]
@@ -147,26 +107,13 @@ pub async fn installed_models() -> Result<Vec<OllamaModelInfo>, String> {
 }
 
 pub async fn list_model_options() -> Vec<OllamaModelInfo> {
-    let mut models = match installed_models().await {
+    match installed_models().await {
         Ok(models) => models,
         Err(err) => {
             eprintln!("ollama: unable to list installed models: {err}");
             Vec::new()
         }
-    };
-
-    for recommended in RECOMMENDED_MODELS {
-        if find_model_name(&models, recommended.name).is_none() {
-            models.push(OllamaModelInfo {
-                name: recommended.name.to_string(),
-                size_bytes: Some(recommended.approx_size_bytes),
-                installed: false,
-                parameter_size: Some(recommended.parameter_size.to_string()),
-            });
-        }
     }
-
-    models
 }
 
 pub async fn model_available(model: &str) -> bool {

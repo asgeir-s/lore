@@ -1,5 +1,4 @@
 import type { NoteMetadata, RecordingState } from "./api";
-import type { PullProgress } from "./SettingsPanel";
 
 export interface BgJob {
   label: string;
@@ -12,7 +11,6 @@ interface Props {
   recording: RecordingState;
   processingProgressByNote: Record<string, string>;
   recentNotes: NoteMetadata[];
-  pullProgress: PullProgress | null;
   error: string | null;
 }
 
@@ -21,7 +19,6 @@ export function BackgroundJobsIndicator({
   recording,
   processingProgressByNote,
   recentNotes,
-  pullProgress,
   error,
 }: Props) {
   const findTitle = (id: string) => recentNotes.find((n) => n.id === id)?.title;
@@ -55,14 +52,6 @@ export function BackgroundJobsIndicator({
       key: `proc-${noteId}`,
       label: progress.replace(/\.+$/, ""),
       noteTitle: findTitle(noteId),
-    });
-  }
-
-  if (pullProgress) {
-    const pct = pullProgress.percent != null ? ` ${pullProgress.percent}%` : "";
-    entries.push({
-      key: "ollama-pull",
-      label: `Pulling model: ${pullProgress.model}${pct}`,
     });
   }
 

@@ -521,12 +521,6 @@ export async function listWhisperModels(): Promise<WhisperModelInfo[]> {
   return [];
 }
 
-export async function pullOllamaModel(name: string): Promise<void> {
-  if (isTauri()) {
-    return invoke<void>("pull_ollama_model", { name });
-  }
-}
-
 function extractTitle(content: string): string {
   for (const line of content.split("\n")) {
     const trimmed = line.trim();

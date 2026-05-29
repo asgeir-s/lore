@@ -27,7 +27,6 @@ import {
   setModelSettings as setModelSettingsApi,
   listOllamaModels,
   listWhisperModels,
-  pullOllamaModel,
 } from "./api";
 import type { RecordingState } from "./api";
 import type {
@@ -42,7 +41,6 @@ import { loadSavedTheme, saveTheme, applyThemeVars } from "./themes";
 import { ThemePicker } from "./ThemePicker";
 import { SearchPalette } from "./SearchPalette";
 import { SettingsPanel } from "./SettingsPanel";
-import type { PullProgress } from "./SettingsPanel";
 import { BackgroundJobsIndicator } from "./BackgroundJobs";
 import type { BgJob } from "./BackgroundJobs";
 import { TagInput } from "./TagInput";
@@ -313,7 +311,6 @@ export default function App() {
   });
   const [ollamaModels, setOllamaModels] = useState<OllamaModelInfo[]>([]);
   const [whisperModels, setWhisperModels] = useState<WhisperModelInfo[]>([]);
-  const [pullProgress, setPullProgress] = useState<PullProgress | null>(null);
   const [recordingPanelId, setRecordingPanelId] = useState<string | null>(null);
   const pendingRecordingPanelRef = useRef<string | null>(null);
   const pendingRecordingPanelsByNoteRef = useRef<Map<string, string>>(
@@ -462,21 +459,6 @@ export default function App() {
     [],
   );
 
-  const handlePullModel = useCallback(async (name: string) => {
-    try {
-      await pullOllamaModel(name);
-    } finally {
-      setPullProgress(null);
-    }
-    // Refresh model list after install.
-    try {
-      const ollama = await listOllamaModels();
-      setOllamaModels(ollama);
-    } catch {
-      // ignore
-    }
-  }, []);
-
   // Fetch model data when settings panel opens
   useEffect(() => {
     if (showSettings) {
@@ -611,7 +593,6 @@ export default function App() {
     let unlistenRecProgress: (() => void) | undefined;
     let unlistenRecComplete: (() => void) | undefined;
     let unlistenRecError: (() => void) | undefined;
-    let unlistenPullProgress: (() => void) | undefined;
     let unlistenGitSync: (() => void) | undefined;
     let unlistenQmdProcessing: (() => void) | undefined;
     let unlistenRelatedChanged: (() => void) | undefined;
@@ -862,25 +843,6 @@ export default function App() {
           },
         );
 
-        unlistenPullProgress = await register(
-          "ollama-pull-progress",
-          (event: {
-            payload: {
-              model: string;
-              status: string;
-              completed: number | null;
-              total: number | null;
-            };
-          }) => {
-            const { model, status, completed, total } = event.payload;
-            const percent =
-              completed != null && total != null && total > 0
-                ? Math.round((completed / total) * 100)
-                : null;
-            setPullProgress({ model, status, percent });
-          },
-        );
-
         // Resume any pending recording jobs from a previous session.
         void checkPendingJobs();
 
@@ -943,7 +905,6 @@ export default function App() {
       unlistenRecProgress?.();
       unlistenRecComplete?.();
       unlistenRecError?.();
-      unlistenPullProgress?.();
       unlistenGitSync?.();
       unlistenQmdProcessing?.();
       unlistenRelatedChanged?.();
@@ -2301,7 +2262,6 @@ export default function App() {
             recording={recording}
             processingProgressByNote={processingProgressByNote}
             recentNotes={recentNotes}
-            pullProgress={pullProgress}
             error={gitError}
           />
           {toolStatus &&
@@ -2379,8 +2339,6 @@ export default function App() {
             ollamaModels={ollamaModels}
             whisperModels={whisperModels}
             onModelSettingsChange={handleModelSettingsChange}
-            onPullModel={handlePullModel}
-            pullProgress={pullProgress}
           />,
           document.body,
         )}

@@ -9,12 +9,6 @@ import type {
   InstallToolKey,
 } from "./api";
 
-export interface PullProgress {
-  model: string;
-  status: string;
-  percent: number | null;
-}
-
 interface SettingsPanelProps {
   toolStatus: ToolStatus;
   notesDirPath: string | null;
@@ -30,8 +24,6 @@ interface SettingsPanelProps {
   ollamaModels: OllamaModelInfo[];
   whisperModels: WhisperModelInfo[];
   onModelSettingsChange: (settings: ModelSettings) => void;
-  onPullModel: (name: string) => Promise<void>;
-  pullProgress: PullProgress | null;
 }
 
 const TOOLS = [
@@ -107,11 +99,8 @@ export function SettingsPanel({
   ollamaModels,
   whisperModels,
   onModelSettingsChange,
-  onPullModel,
-  pullProgress,
 }: SettingsPanelProps) {
   const [devices, setDevices] = useState<InputDeviceInfo[]>([]);
-  const [pullingModel, setPullingModel] = useState<string | null>(null);
   const [installingTool, setInstallingTool] = useState<ToolKey | null>(null);
   const [notesPathInput, setNotesPathInput] = useState(notesDirPath ?? "");
   const [gitRemoteInput, setGitRemoteInput] = useState(gitRemoteUrl ?? "");
@@ -171,18 +160,6 @@ export function SettingsPanel({
     [modelSettings, onModelSettingsChange],
   );
 
-  const handlePullModel = useCallback(
-    async (name: string) => {
-      setPullingModel(name);
-      try {
-        await onPullModel(name);
-      } finally {
-        setPullingModel(null);
-      }
-    },
-    [onPullModel],
-  );
-
   const handleInstallTool = useCallback(
     async (tool: ToolKey) => {
       setInstallingTool(tool);
@@ -224,7 +201,6 @@ export function SettingsPanel({
   }, [gitRemoteInput, onSaveGitRemote]);
 
   const installedOllama = ollamaModels.filter((m) => m.installed);
-  const uninstalledOllama = ollamaModels.filter((m) => !m.installed);
 
   return (
     <div className="settings-overlay" onMouseDown={onClose}>
@@ -306,6 +282,14 @@ export function SettingsPanel({
 
         <div className="settings-section">
           <div className="settings-section-title">Models</div>
+          <div className="settings-tool-desc">
+            Ollama models are picked up from a locally running Ollama instance.
+            Whisper models are scanned from standard whisper-cpp install
+            locations.{" "}
+            {(!toolStatus.ollama || !toolStatus.whisper) && (
+              <>See <em>Missing Tools</em> below to install what&apos;s needed.</>
+            )}
+          </div>
 
           <label className="settings-model-label">
             Keywords model (ollama)
@@ -323,6 +307,13 @@ export function SettingsPanel({
               </option>
             ))}
           </select>
+          {toolStatus.ollama && installedOllama.length === 0 && (
+            <p className="settings-tool-desc">
+              No Ollama models found. Run{" "}
+              <code>ollama pull &lt;model&gt;</code> in your terminal to install
+              one, e.g. <code>ollama pull qwen2.5:1.5b</code>.
+            </p>
+          )}
 
           <label className="settings-model-label">Summary model (ollama)</label>
           <select
@@ -354,48 +345,6 @@ export function SettingsPanel({
               </option>
             ))}
           </select>
-
-          {uninstalledOllama.length > 0 && (
-            <div className="settings-model-recommended">
-              <div className="settings-model-recommended-title">
-                Recommended ollama models
-              </div>
-              {uninstalledOllama.map((m) => (
-                <div key={m.name} className="settings-model-row">
-                  <span className="settings-model-name">{m.name}</span>
-                  <span className="settings-model-size">
-                    {m.parameter_size ?? ""}
-                    {m.size_bytes ? ` · ${formatSize(m.size_bytes)}` : ""}
-                  </span>
-                  {pullingModel === m.name && pullProgress?.model === m.name ? (
-                    <div className="settings-model-progress">
-                      <div className="settings-model-progress-text">
-                        {pullProgress.percent !== null
-                          ? `Downloading... ${pullProgress.percent}%`
-                          : pullProgress.status}
-                      </div>
-                      {pullProgress.percent !== null && (
-                        <div className="settings-model-progress-bar">
-                          <div
-                            className="settings-model-progress-fill"
-                            style={{ width: `${pullProgress.percent}%` }}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <button
-                      className="settings-model-install-btn"
-                      disabled={pullingModel !== null}
-                      onClick={() => handlePullModel(m.name)}
-                    >
-                      {pullingModel === m.name ? "Installing..." : "Install"}
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
         </div>
 
         {TOOLS.some((t) => !toolStatus[t.key]) && (

@@ -1165,7 +1165,12 @@ pub async fn check_tools() -> ToolStatus {
         .unwrap_or(false);
 
     let qmd = qmd_available().await;
-    let ollama = ollama_available(DEFAULT_OLLAMA_MODEL).await;
+    let ollama = cmd("ollama")
+        .arg("--version")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
 
     let ffmpeg = cmd("ffmpeg")
         .arg("-version")

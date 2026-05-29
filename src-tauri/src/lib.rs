@@ -11,7 +11,7 @@ use recording::RecordingHandle;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::{Emitter, Manager, RunEvent, State};
+use tauri::{Manager, RunEvent, State};
 
 const DEFAULT_NOTES_DIR_NAME: &str = "lore";
 const MODEL_SETTINGS_FILE: &str = ".lore-models.json";
@@ -786,106 +786,6 @@ async fn list_whisper_models() -> Result<Vec<WhisperModelInfo>, String> {
     Ok(models)
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct OllamaPullProgress {
-    model: String,
-    status: String,
-    completed: Option<u64>,
-    total: Option<u64>,
-}
-
-#[tauri::command]
-async fn pull_ollama_model(app_handle: tauri::AppHandle, name: String) -> Result<(), String> {
-    use futures_util::StreamExt;
-
-    ollama::ensure_ollama_running().await?;
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(ollama::api_url("/api/pull"))
-        .json(&serde_json::json!({ "name": &name }))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to connect to ollama: {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("ollama pull failed: HTTP {}", resp.status()));
-    }
-
-    let mut stream = resp.bytes_stream();
-    let mut buf = Vec::new();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("Stream error: {e}"))?;
-        buf.extend_from_slice(&chunk);
-
-        // Process complete NDJSON lines
-        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-            let line: Vec<u8> = buf.drain(..=pos).collect();
-            let line = String::from_utf8_lossy(&line);
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                let status = json
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let completed = json.get("completed").and_then(|v| v.as_u64());
-                let total = json.get("total").and_then(|v| v.as_u64());
-
-                if let Some(error) = json.get("error").and_then(|v| v.as_str()) {
-                    return Err(format!("ollama pull failed: {error}"));
-                }
-
-                let _ = app_handle.emit(
-                    "ollama-pull-progress",
-                    OllamaPullProgress {
-                        model: name.clone(),
-                        status: status.clone(),
-                        completed,
-                        total,
-                    },
-                );
-            }
-        }
-    }
-
-    // Process any remaining data in buffer
-    if !buf.is_empty() {
-        let line = String::from_utf8_lossy(&buf);
-        let line = line.trim();
-        if !line.is_empty() {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                if let Some(error) = json.get("error").and_then(|v| v.as_str()) {
-                    return Err(format!("ollama pull failed: {error}"));
-                }
-                let status = json
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let completed = json.get("completed").and_then(|v| v.as_u64());
-                let total = json.get("total").and_then(|v| v.as_u64());
-                let _ = app_handle.emit(
-                    "ollama-pull-progress",
-                    OllamaPullProgress {
-                        model: name.clone(),
-                        status,
-                        completed,
-                        total,
-                    },
-                );
-            }
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -954,7 +854,6 @@ pub fn run() {
             set_model_settings,
             list_ollama_models,
             list_whisper_models,
-            pull_ollama_model,
             open_tool_installer,
         ])
         .build(tauri::generate_context!())
