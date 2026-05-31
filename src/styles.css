@@ -1636,7 +1636,8 @@ body {
 
 /* Meeting view toggle */
 .meeting-view-toggle {
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
   gap: 0;
   margin-bottom: 12px;
   border: 1px solid var(--border);
@@ -1645,6 +1646,7 @@ body {
 }
 
 .meeting-view-toggle button {
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1655,11 +1657,11 @@ body {
   color: var(--text-muted);
   background: var(--bg);
   border: none;
-  cursor: pointer;
-}
-
-.meeting-view-toggle button + button {
   border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+  margin-left: -1px;
+  margin-top: -1px;
+  cursor: pointer;
 }
 
 .meeting-view-toggle button:hover {

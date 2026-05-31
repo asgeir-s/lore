@@ -134,10 +134,8 @@ export function SearchPalette({
                 {note.tags.includes("meeting") && (
                   <span className="note-item-meeting">⏺</span>
                 )}
-                <span className="search-palette-title">{note.title}</span>
-                <span className="search-palette-kind">
-                  {isPinnedNotePath(note.path) ? "Pinned" : "Note"}
-                </span>
+                 <span className="search-palette-title">{note.title}</span>
+
               </button>
             ))}
           </div>
