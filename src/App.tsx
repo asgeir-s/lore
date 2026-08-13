@@ -699,6 +699,10 @@ export default function App() {
             const noteId = event.payload;
             const panelId = recordingNoteToPanelRef.current.get(noteId);
             setRecording((prev) => ({ ...prev, active: false, paused: false }));
+            if (stopConfirmTimeout.current) {
+              clearTimeout(stopConfirmTimeout.current);
+            }
+            setStopConfirmWarning(false);
             setRecordingPanelId(null);
             if (recordingCloseWarningTimeout.current) {
               clearTimeout(recordingCloseWarningTimeout.current);
@@ -2250,7 +2254,7 @@ export default function App() {
         )}
       {stopConfirmWarning &&
         createPortal(
-          <div className="delete-warning-toast">
+          <div className="stop-warning-toast">
             Stop recording? Click stop again to confirm
           </div>,
           document.body,

@@ -763,7 +763,10 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         appendMeetingData: async (summary: string, transcript: string) => {
           const noteIdNow = loadedNoteIdRef.current;
           if (!noteIdNow) return;
-          const hadLocalEdits = userModified;
+          // A new recording temporarily keeps the panel in editing mode while
+          // its empty note gets an ID. Only preserve editing mode for actual
+          // unsaved changes, otherwise show the completed note's tabs.
+          const hadLocalEdits = hasUnsavedChanges(true);
           const shouldStayEditing = hadLocalEdits;
           try {
             // If the user edited title/tags/content while processing, persist those edits first.
@@ -813,6 +816,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         saveIfNeeded,
         userModified,
         loadedNoteId,
+        hasUnsavedChanges,
         displayedNotes,
         highlightIndex,
         onNoteClick,
@@ -1232,18 +1236,72 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           <div className="panel-actions">
             {recording?.active && isRecordingPanel ? (
               <>
-              <button
-                className={`record-btn recording ${
-                  recording.paused ? "paused" : ""
-                }`}
-                onClick={
-                  recording.paused ? onResumeRecording : onPauseRecording
-                }
-                title={recording.paused ? "Resume" : "Pause"}
-              >
-                {recording.paused ? (
+                <button
+                  className={`record-btn recording ${
+                    recording.paused ? "paused" : ""
+                  }`}
+                  onClick={
+                    recording.paused ? onResumeRecording : onPauseRecording
+                  }
+                  title={recording.paused ? "Resume" : "Pause"}
+                  aria-label={recording.paused ? "Resume recording" : "Pause recording"}
+                >
+                  {recording.paused ? (
+                    <svg
+                      className="rec-play-icon"
+                      width="10"
+                      height="10"
+                      viewBox="0 0 24 24"
+                      fill="currentColor"
+                      xmlns="http://www.w3.org/2000/svg"
+                      aria-hidden="true"
+                    >
+                      <polygon points="6 3 20 12 6 21 6 3" />
+                    </svg>
+                  ) : (
+                    <span className="rec-dot" />
+                  )}
+                  <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {String(Math.floor(recording.elapsed_seconds / 60)).padStart(
+                      1,
+                      "0",
+                    )}
+                    :{String(recording.elapsed_seconds % 60).padStart(2, "0")}
+                  </span>
+                  {!recording.paused && (
+                    <span className="level-bars">
+                      <span
+                        className="level-bar mic"
+                        style={{
+                          height: `${Math.min(100, (recording.mic_level ?? 0) * 300)}%`,
+                        }}
+                      />
+                      <span
+                        className="level-bar system"
+                        style={{
+                          height: `${Math.min(100, (recording.system_level ?? 0) * 300)}%`,
+                        }}
+                      />
+                    </span>
+                  )}
+                </button>
+                <button
+                  className={`record-btn stop-btn ${
+                    stopConfirmPending ? "confirm" : ""
+                  }`}
+                  onClick={onStopRecording}
+                  title={
+                    stopConfirmPending
+                      ? "Click again to confirm stop"
+                      : "Stop recording"
+                  }
+                  aria-label={
+                    stopConfirmPending
+                      ? "Confirm stop recording"
+                      : "Stop recording"
+                  }
+                >
                   <svg
-                    className="rec-play-icon"
                     width="10"
                     height="10"
                     viewBox="0 0 24 24"
@@ -1251,57 +1309,9 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
                     xmlns="http://www.w3.org/2000/svg"
                     aria-hidden="true"
                   >
-                    <polygon points="6 3 20 12 6 21 6 3" />
+                    <rect x="4" y="4" width="16" height="16" rx="2" />
                   </svg>
-                ) : (
-                  <span className="rec-dot" />
-                )}
-                <span style={{ fontVariantNumeric: "tabular-nums" }}>
-                  {String(Math.floor(recording.elapsed_seconds / 60)).padStart(
-                    1,
-                    "0",
-                  )}
-                  :{String(recording.elapsed_seconds % 60).padStart(2, "0")}
-                </span>
-                {!recording.paused && (
-                  <span className="level-bars">
-                    <span
-                      className="level-bar mic"
-                      style={{
-                        height: `${Math.min(100, (recording.mic_level ?? 0) * 300)}%`,
-                      }}
-                    />
-                    <span
-                      className="level-bar system"
-                      style={{
-                        height: `${Math.min(100, (recording.system_level ?? 0) * 300)}%`,
-                      }}
-                    />
-                  </span>
-                )}
-              </button>
-              <button
-                className={`record-btn stop-btn ${
-                  stopConfirmPending ? "confirm" : ""
-                }`}
-                onClick={onStopRecording}
-                title={
-                  stopConfirmPending
-                    ? "Click again to confirm stop"
-                    : "Stop recording"
-                }
-              >
-                <svg
-                  width="10"
-                  height="10"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  xmlns="http://www.w3.org/2000/svg"
-                  aria-hidden="true"
-                >
-                  <rect x="4" y="4" width="16" height="16" rx="2" />
-                </svg>
-              </button>
+                </button>
               </>
             ) : effectiveProcessingProgress ? (
               <span className="recording-progress-text">

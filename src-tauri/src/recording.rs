@@ -334,6 +334,7 @@ async fn run_worker(
 
                 // Set state
                 active.store(true, Ordering::Relaxed);
+                paused.store(false, Ordering::Relaxed);
                 elapsed.store(0, Ordering::Relaxed);
                 if let Ok(mut slot) = note_id_slot.lock() {
                     *slot = Some(note_id.clone());
@@ -424,9 +425,7 @@ async fn run_worker(
                 loop {
                     match rx.recv().await {
                         Some(Msg::Pause) => {
-                            if !active.load(Ordering::Relaxed)
-                                || paused.load(Ordering::Relaxed)
-                            {
+                            if !active.load(Ordering::Relaxed) || paused.load(Ordering::Relaxed) {
                                 continue;
                             }
                             paused.store(true, Ordering::Relaxed);
@@ -941,14 +940,16 @@ fn record_device_inner(
             StreamControl::Pause => {
                 if let Err(e) = stream.pause() {
                     eprintln!("recording: [{label}] pause error: {e}");
+                } else {
+                    was_paused = true;
                 }
-                was_paused = true;
             }
             StreamControl::Play => {
                 if let Err(e) = stream.play() {
                     eprintln!("recording: [{label}] resume error: {e}");
+                } else {
+                    was_paused = false;
                 }
-                was_paused = false;
             }
             StreamControl::None => {}
         }
@@ -2330,8 +2331,7 @@ mod tests {
             elapsed_seconds: 0,
         };
         let json = serde_json::to_string(&state).expect("serialize");
-        let deserialized: serde_json::Value =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: serde_json::Value = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(deserialized["paused"], false);
         assert_eq!(deserialized["active"], false);
     }

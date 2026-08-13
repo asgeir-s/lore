@@ -1160,6 +1160,24 @@ body {
   white-space: nowrap;
 }
 
+/* Stop warning toast */
+.stop-warning-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 250;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #d4a017;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, #d4a017 30%, var(--border));
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  white-space: nowrap;
+}
+
 .delete-warning-toast kbd {
   display: inline-block;
   padding: 1px 5px;
@@ -1171,7 +1189,8 @@ body {
 }
 
 @media (prefers-color-scheme: dark) {
-  .delete-warning-toast {
+  .delete-warning-toast,
+  .stop-warning-toast {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   }
 }
