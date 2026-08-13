@@ -374,6 +374,7 @@ export async function openToolInstaller(tool: InstallToolKey): Promise<void> {
 
 export interface RecordingState {
   active: boolean;
+  paused: boolean;
   note_id: string | null;
   elapsed_seconds: number;
   mic_level: number;
@@ -408,6 +409,18 @@ export async function startRecording(
 export async function stopRecording(): Promise<void> {
   if (isTauri()) {
     return invoke<void>("stop_recording");
+  }
+}
+
+export async function pauseRecording(): Promise<void> {
+  if (isTauri()) {
+    return invoke<void>("pause_recording");
+  }
+}
+
+export async function resumeRecording(): Promise<void> {
+  if (isTauri()) {
+    return invoke<void>("resume_recording");
   }
 }
 
@@ -452,6 +465,7 @@ export async function getRecordingState(): Promise<RecordingState> {
   }
   return {
     active: false,
+    paused: false,
     note_id: null,
     elapsed_seconds: 0,
     mic_level: 0,

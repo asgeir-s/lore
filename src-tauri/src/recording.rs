@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 #[derive(Clone, Serialize)]
 pub struct RecordingState {
     pub active: bool,
+    pub paused: bool,
     pub note_id: Option<String>,
     pub elapsed_seconds: u64,
 }
@@ -208,6 +209,8 @@ enum Msg {
         summary_model: Option<String>,
         whisper_model: Option<String>,
     },
+    Pause,
+    Resume,
     Stop,
     Shutdown,
 }
@@ -218,6 +221,7 @@ enum Msg {
 pub struct RecordingHandle {
     tx: mpsc::UnboundedSender<Msg>,
     active: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     note_id: Arc<std::sync::Mutex<Option<String>>>,
     elapsed: Arc<std::sync::atomic::AtomicU64>,
 }
@@ -226,10 +230,12 @@ impl RecordingHandle {
     pub fn new(app_handle: tauri::AppHandle) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let active = Arc::new(AtomicBool::new(false));
+        let paused = Arc::new(AtomicBool::new(false));
         let note_id: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
         let elapsed = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
         let worker_active = active.clone();
+        let worker_paused = paused.clone();
         let worker_note_id = note_id.clone();
         let worker_elapsed = elapsed.clone();
 
@@ -238,6 +244,7 @@ impl RecordingHandle {
                 rx,
                 app_handle,
                 worker_active,
+                worker_paused,
                 worker_note_id,
                 worker_elapsed,
             )
@@ -247,6 +254,7 @@ impl RecordingHandle {
         Self {
             tx,
             active,
+            paused,
             note_id,
             elapsed,
         }
@@ -273,6 +281,14 @@ impl RecordingHandle {
         let _ = self.tx.send(Msg::Stop);
     }
 
+    pub fn pause(&self) {
+        let _ = self.tx.send(Msg::Pause);
+    }
+
+    pub fn resume(&self) {
+        let _ = self.tx.send(Msg::Resume);
+    }
+
     pub fn shutdown(&self) {
         let _ = self.tx.send(Msg::Shutdown);
     }
@@ -280,6 +296,7 @@ impl RecordingHandle {
     pub fn state(&self) -> RecordingState {
         RecordingState {
             active: self.active.load(Ordering::Relaxed),
+            paused: self.paused.load(Ordering::Relaxed),
             note_id: self.note_id.lock().ok().and_then(|g| g.clone()),
             elapsed_seconds: self.elapsed.load(Ordering::Relaxed),
         }
@@ -292,6 +309,7 @@ async fn run_worker(
     mut rx: mpsc::UnboundedReceiver<Msg>,
     app_handle: tauri::AppHandle,
     active: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     note_id_slot: Arc<std::sync::Mutex<Option<String>>>,
     elapsed: Arc<std::sync::atomic::AtomicU64>,
 ) {
@@ -324,7 +342,9 @@ async fn run_worker(
 
                 // Spawn audio capture on a dedicated std::thread (cpal callbacks are real-time).
                 let stop_flag = Arc::new(AtomicBool::new(false));
+                let pause_flag = Arc::new(AtomicBool::new(false));
                 let stop_flag_thread = stop_flag.clone();
+                let pause_flag_thread = pause_flag.clone();
                 let mic_path = audio_dir.join(format!("{note_id}_mic.wav"));
                 let system_path = audio_dir.join(format!("{note_id}_system.wav"));
                 let final_wav = audio_dir.join(format!("{note_id}.wav"));
@@ -364,6 +384,7 @@ async fn run_worker(
                         &mic_path_clone,
                         &system_path_clone,
                         stop_flag_thread,
+                        pause_flag_thread,
                         preferred_device,
                         mic_level_capture,
                         system_level_capture,
@@ -373,6 +394,7 @@ async fn run_worker(
                 // Tick elapsed every second while recording.
                 let elapsed_clone = elapsed.clone();
                 let active_clone = active.clone();
+                let paused_clone = paused.clone();
                 let app_clone = app_handle.clone();
                 let tick_handle = tauri::async_runtime::spawn(async move {
                     let mut seconds = 0u64;
@@ -381,7 +403,9 @@ async fn run_worker(
                         if !active_clone.load(Ordering::Relaxed) {
                             break;
                         }
-                        seconds = seconds.wrapping_add(1);
+                        if !paused_clone.load(Ordering::Relaxed) {
+                            seconds = seconds.wrapping_add(1);
+                        }
                         let secs = seconds / 6; // ~150ms ticks → seconds
                         elapsed_clone.store(secs, Ordering::Relaxed);
                         let _ = app_clone.emit(
@@ -399,9 +423,28 @@ async fn run_worker(
                 let mut is_shutdown = false;
                 loop {
                     match rx.recv().await {
+                        Some(Msg::Pause) => {
+                            if !active.load(Ordering::Relaxed)
+                                || paused.load(Ordering::Relaxed)
+                            {
+                                continue;
+                            }
+                            paused.store(true, Ordering::Relaxed);
+                            pause_flag.store(true, Ordering::Relaxed);
+                            let _ = app_handle.emit("recording-paused", &note_id);
+                        }
+                        Some(Msg::Resume) => {
+                            if !paused.load(Ordering::Relaxed) {
+                                continue;
+                            }
+                            paused.store(false, Ordering::Relaxed);
+                            pause_flag.store(false, Ordering::Relaxed);
+                            let _ = app_handle.emit("recording-resumed", &note_id);
+                        }
                         Some(Msg::Stop) => {
                             stop_flag.store(true, Ordering::Relaxed);
                             active.store(false, Ordering::Relaxed);
+                            paused.store(false, Ordering::Relaxed);
                             tick_handle.abort();
                             let _ = app_handle.emit("recording-stopped", &note_id);
 
@@ -446,6 +489,7 @@ async fn run_worker(
                             // Graceful shutdown: save job for next startup, don't process.
                             stop_flag.store(true, Ordering::Relaxed);
                             active.store(false, Ordering::Relaxed);
+                            paused.store(false, Ordering::Relaxed);
                             tick_handle.abort();
 
                             // Wait for capture thread with 5-second timeout.
@@ -478,6 +522,7 @@ async fn run_worker(
                         None => {
                             stop_flag.store(true, Ordering::Relaxed);
                             active.store(false, Ordering::Relaxed);
+                            paused.store(false, Ordering::Relaxed);
                             tick_handle.abort();
                             is_shutdown = true;
                             break;
@@ -488,7 +533,7 @@ async fn run_worker(
                     break;
                 }
             }
-            Some(Msg::Stop) => {
+            Some(Msg::Stop) | Some(Msg::Pause) | Some(Msg::Resume) => {
                 // Not recording, ignore.
             }
             Some(Msg::Shutdown) | None => break,
@@ -525,6 +570,7 @@ fn capture_audio(
     mic_path: &Path,
     system_path: &Path,
     stop: Arc<AtomicBool>,
+    pause: Arc<AtomicBool>,
     preferred_device: Option<String>,
     mic_level: AudioLevel,
     system_level: AudioLevel,
@@ -545,6 +591,7 @@ fn capture_audio(
     // cpal 0.17+ on macOS: building an input stream on the default OUTPUT
     // device captures system audio via a CoreAudio process tap.
     let system_stop = stop.clone();
+    let system_pause = pause.clone();
     let system_path_owned = system_path.to_path_buf();
     let system_handle = std::thread::spawn(move || -> Result<(), String> {
         let host = cpal::default_host();
@@ -560,6 +607,7 @@ fn capture_audio(
                 &output_device,
                 &system_path_owned,
                 system_stop,
+                system_pause,
                 Some(system_level),
             )?;
         }
@@ -588,7 +636,7 @@ fn capture_audio(
             .unwrap_or_default()
     );
 
-    record_device(&mic_device, mic_path, stop, Some(mic_level))?;
+    record_device(&mic_device, mic_path, stop, pause, Some(mic_level))?;
 
     // Wait for system audio thread and check result.
     let has_system = match system_handle.join() {
@@ -723,9 +771,10 @@ fn record_device(
     device: &cpal::Device,
     output_path: &Path,
     stop: Arc<AtomicBool>,
+    pause: Arc<AtomicBool>,
     level: Option<AudioLevel>,
 ) -> Result<(), String> {
-    record_device_inner(device, output_path, stop, false, level)
+    record_device_inner(device, output_path, stop, pause, false, level)
 }
 
 /// Record from an output device via CoreAudio loopback (system audio).
@@ -733,15 +782,33 @@ fn record_loopback(
     device: &cpal::Device,
     output_path: &Path,
     stop: Arc<AtomicBool>,
+    pause: Arc<AtomicBool>,
     level: Option<AudioLevel>,
 ) -> Result<(), String> {
-    record_device_inner(device, output_path, stop, true, level)
+    record_device_inner(device, output_path, stop, pause, true, level)
+}
+
+/// Decision for stream control based on whether the pause state changed.
+#[derive(Debug, PartialEq, Eq)]
+enum StreamControl {
+    Pause,
+    Play,
+    None,
+}
+
+fn stream_control(previous_paused: bool, current_paused: bool) -> StreamControl {
+    match (previous_paused, current_paused) {
+        (false, true) => StreamControl::Pause,
+        (true, false) => StreamControl::Play,
+        _ => StreamControl::None,
+    }
 }
 
 fn record_device_inner(
     device: &cpal::Device,
     output_path: &Path,
     stop: Arc<AtomicBool>,
+    pause: Arc<AtomicBool>,
     loopback: bool,
     level: Option<AudioLevel>,
 ) -> Result<(), String> {
@@ -866,8 +933,25 @@ fn record_device_inner(
         .play()
         .map_err(|e| format!("Failed to play stream: {e}"))?;
 
-    // Block until stop flag is set.
+    // Block until stop flag is set, pausing/resuming the stream as requested.
+    let mut was_paused = false;
     while !stop.load(Ordering::Relaxed) {
+        let should_pause = pause.load(Ordering::Relaxed);
+        match stream_control(was_paused, should_pause) {
+            StreamControl::Pause => {
+                if let Err(e) = stream.pause() {
+                    eprintln!("recording: [{label}] pause error: {e}");
+                }
+                was_paused = true;
+            }
+            StreamControl::Play => {
+                if let Err(e) = stream.play() {
+                    eprintln!("recording: [{label}] resume error: {e}");
+                }
+                was_paused = false;
+            }
+            StreamControl::None => {}
+        }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
@@ -2206,5 +2290,49 @@ mod tests {
             ],
         );
         assert_eq!(tags, vec!["voice-memo", "project", "follow-up"]);
+    }
+
+    #[test]
+    fn stream_control_detects_pause_transition() {
+        assert_eq!(stream_control(false, true), StreamControl::Pause);
+    }
+
+    #[test]
+    fn stream_control_detects_resume_transition() {
+        assert_eq!(stream_control(true, false), StreamControl::Play);
+    }
+
+    #[test]
+    fn stream_control_returns_none_when_unchanged() {
+        assert_eq!(stream_control(false, false), StreamControl::None);
+        assert_eq!(stream_control(true, true), StreamControl::None);
+    }
+
+    #[test]
+    fn recording_state_serializes_paused_field() {
+        let state = RecordingState {
+            active: true,
+            paused: true,
+            note_id: Some("abc".to_string()),
+            elapsed_seconds: 42,
+        };
+        let json = serde_json::to_string(&state).expect("serialize");
+        assert!(json.contains("\"paused\":true"));
+        assert!(json.contains("\"active\":true"));
+    }
+
+    #[test]
+    fn recording_state_default_round_trip() {
+        let state = RecordingState {
+            active: false,
+            paused: false,
+            note_id: None,
+            elapsed_seconds: 0,
+        };
+        let json = serde_json::to_string(&state).expect("serialize");
+        let deserialized: serde_json::Value =
+            serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(deserialized["paused"], false);
+        assert_eq!(deserialized["active"], false);
     }
 }

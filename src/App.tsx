@@ -21,6 +21,8 @@ import {
   openToolInstaller,
   startRecording,
   stopRecording,
+  pauseRecording,
+  resumeRecording,
   checkPendingJobs,
   appendMeetingData as appendMeetingDataToNote,
   getModelSettings,
@@ -288,6 +290,7 @@ export default function App() {
   const [toolStatus, setToolStatus] = useState<ToolStatus | null>(null);
   const [recording, setRecording] = useState<RecordingState>({
     active: false,
+    paused: false,
     note_id: null,
     elapsed_seconds: 0,
     mic_level: 0,
@@ -295,6 +298,8 @@ export default function App() {
   });
   const [recordingStartPending, setRecordingStartPending] = useState(false);
   const recordingStartPendingRef = useRef(false);
+  const [stopConfirmWarning, setStopConfirmWarning] = useState(false);
+  const stopConfirmTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [processingProgressByPanel, setProcessingProgressByPanel] = useState<
     Record<string, string>
   >({});
@@ -589,6 +594,8 @@ export default function App() {
     let unlistenNotesChanged: (() => void) | undefined;
     let unlistenRecStarted: (() => void) | undefined;
     let unlistenRecTick: (() => void) | undefined;
+    let unlistenRecPaused: (() => void) | undefined;
+    let unlistenRecResumed: (() => void) | undefined;
     let unlistenRecStopped: (() => void) | undefined;
     let unlistenRecProgress: (() => void) | undefined;
     let unlistenRecComplete: (() => void) | undefined;
@@ -654,6 +661,7 @@ export default function App() {
             });
             setRecording({
               active: true,
+              paused: false,
               note_id: noteId,
               elapsed_seconds: 0,
               mic_level: 0,
@@ -679,12 +687,18 @@ export default function App() {
             }));
           },
         );
+        unlistenRecPaused = await register("recording-paused", () => {
+          setRecording((prev) => ({ ...prev, paused: true }));
+        });
+        unlistenRecResumed = await register("recording-resumed", () => {
+          setRecording((prev) => ({ ...prev, paused: false }));
+        });
         unlistenRecStopped = await register(
           "recording-stopped",
           (event: { payload: string }) => {
             const noteId = event.payload;
             const panelId = recordingNoteToPanelRef.current.get(noteId);
-            setRecording((prev) => ({ ...prev, active: false }));
+            setRecording((prev) => ({ ...prev, active: false, paused: false }));
             setRecordingPanelId(null);
             if (recordingCloseWarningTimeout.current) {
               clearTimeout(recordingCloseWarningTimeout.current);
@@ -753,6 +767,7 @@ export default function App() {
               if (prev.active || prev.note_id !== note_id) return prev;
               return {
                 active: false,
+                paused: false,
                 note_id: null,
                 elapsed_seconds: 0,
                 mic_level: 0,
@@ -901,6 +916,8 @@ export default function App() {
       unlistenNotesChanged?.();
       unlistenRecStarted?.();
       unlistenRecTick?.();
+      unlistenRecPaused?.();
+      unlistenRecResumed?.();
       unlistenRecStopped?.();
       unlistenRecProgress?.();
       unlistenRecComplete?.();
@@ -1142,6 +1159,33 @@ export default function App() {
     [panels, activePanelIndex, recordingDevice, recording.active],
   );
 
+  const handleStopRecording = useCallback(() => {
+    if (stopConfirmWarning) {
+      if (stopConfirmTimeout.current) {
+        clearTimeout(stopConfirmTimeout.current);
+      }
+      setStopConfirmWarning(false);
+      void stopRecording();
+    } else {
+      if (stopConfirmTimeout.current) {
+        clearTimeout(stopConfirmTimeout.current);
+      }
+      setStopConfirmWarning(true);
+      stopConfirmTimeout.current = setTimeout(
+        () => setStopConfirmWarning(false),
+        3000,
+      );
+    }
+  }, [stopConfirmWarning]);
+
+  const handlePauseRecording = useCallback(() => {
+    void pauseRecording();
+  }, []);
+
+  const handleResumeRecording = useCallback(() => {
+    void resumeRecording();
+  }, []);
+
   // Keyboard shortcuts
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -1361,11 +1405,13 @@ export default function App() {
         setSearchPaletteOpen(true);
         return;
       }
-      // Cmd+Shift+R — toggle recording
+      // Cmd+Shift+R — start / pause / resume recording (stop via button)
       if (e.key === "R" && e.shiftKey && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        if (recording.active) {
-          void stopRecording();
+        if (recording.active && recording.paused) {
+          void resumeRecording();
+        } else if (recording.active) {
+          void pauseRecording();
         } else {
           void handleStartRecording();
         }
@@ -2079,7 +2125,10 @@ export default function App() {
                 processingProgressByNote={processingProgressByNote}
                 recordingLocked={recording.active || recordingStartPending}
                 onStartRecording={() => void handleStartRecording(panel.id)}
-                onStopRecording={() => void stopRecording()}
+                onStopRecording={handleStopRecording}
+                onPauseRecording={handlePauseRecording}
+                onResumeRecording={handleResumeRecording}
+                stopConfirmPending={stopConfirmWarning}
                 isRecordingPanel={panel.id === recordingPanelId}
                 onBgJob={handleBgJob}
               />
@@ -2196,6 +2245,13 @@ export default function App() {
           <div className="delete-warning-toast">
             Delete note? Press <kbd>{primaryModifier}</kbd> <kbd>D</kbd> again
             to confirm
+          </div>,
+          document.body,
+        )}
+      {stopConfirmWarning &&
+        createPortal(
+          <div className="delete-warning-toast">
+            Stop recording? Click stop again to confirm
           </div>,
           document.body,
         )}

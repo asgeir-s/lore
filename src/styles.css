@@ -1587,6 +1587,47 @@ body {
   background: color-mix(in srgb, #d44 14%, transparent);
 }
 
+.record-btn.recording.paused {
+  color: #d4a017;
+  background: color-mix(in srgb, #d4a017 8%, transparent);
+  border-color: color-mix(in srgb, #d4a017 20%, transparent);
+}
+
+.record-btn.recording.paused:hover {
+  background: color-mix(in srgb, #d4a017 14%, transparent);
+}
+
+.rec-play-icon {
+  flex-shrink: 0;
+}
+
+/* Stop button — separate from the main recording pill */
+.record-btn.stop-btn {
+  opacity: 0.4;
+  width: auto;
+  height: auto;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: var(--fg-muted, #888);
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.record-btn.stop-btn:hover {
+  opacity: 1;
+  color: #d44;
+  background: color-mix(in srgb, #d44 10%, transparent);
+  border-color: color-mix(in srgb, #d44 30%, transparent);
+}
+
+.record-btn.stop-btn.confirm {
+  opacity: 1;
+  color: #d44;
+  background: color-mix(in srgb, #d44 15%, transparent);
+  border-color: color-mix(in srgb, #d44 40%, transparent);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+
 .rec-dot {
   display: inline-block;
   width: 6px;

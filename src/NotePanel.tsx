@@ -74,6 +74,9 @@ interface NotePanelProps {
   recordingLocked?: boolean;
   onStartRecording?: () => void;
   onStopRecording?: () => void;
+  onPauseRecording?: () => void;
+  onResumeRecording?: () => void;
+  stopConfirmPending?: boolean;
   isRecordingPanel?: boolean;
   onBgJob?: (key: string, label: string | null, noteId?: string) => void;
 }
@@ -298,6 +301,9 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       recordingLocked,
       onStartRecording,
       onStopRecording,
+      onPauseRecording,
+      onResumeRecording,
+      stopConfirmPending,
       isRecordingPanel,
       onBgJob,
     },
@@ -1225,11 +1231,31 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           </div>
           <div className="panel-actions">
             {recording?.active && isRecordingPanel ? (
+              <>
               <button
-                className="record-btn recording"
-                onClick={onStopRecording}
+                className={`record-btn recording ${
+                  recording.paused ? "paused" : ""
+                }`}
+                onClick={
+                  recording.paused ? onResumeRecording : onPauseRecording
+                }
+                title={recording.paused ? "Resume" : "Pause"}
               >
-                <span className="rec-dot" />
+                {recording.paused ? (
+                  <svg
+                    className="rec-play-icon"
+                    width="10"
+                    height="10"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    xmlns="http://www.w3.org/2000/svg"
+                    aria-hidden="true"
+                  >
+                    <polygon points="6 3 20 12 6 21 6 3" />
+                  </svg>
+                ) : (
+                  <span className="rec-dot" />
+                )}
                 <span style={{ fontVariantNumeric: "tabular-nums" }}>
                   {String(Math.floor(recording.elapsed_seconds / 60)).padStart(
                     1,
@@ -1237,21 +1263,46 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
                   )}
                   :{String(recording.elapsed_seconds % 60).padStart(2, "0")}
                 </span>
-                <span className="level-bars">
-                  <span
-                    className="level-bar mic"
-                    style={{
-                      height: `${Math.min(100, (recording.mic_level ?? 0) * 300)}%`,
-                    }}
-                  />
-                  <span
-                    className="level-bar system"
-                    style={{
-                      height: `${Math.min(100, (recording.system_level ?? 0) * 300)}%`,
-                    }}
-                  />
-                </span>
+                {!recording.paused && (
+                  <span className="level-bars">
+                    <span
+                      className="level-bar mic"
+                      style={{
+                        height: `${Math.min(100, (recording.mic_level ?? 0) * 300)}%`,
+                      }}
+                    />
+                    <span
+                      className="level-bar system"
+                      style={{
+                        height: `${Math.min(100, (recording.system_level ?? 0) * 300)}%`,
+                      }}
+                    />
+                  </span>
+                )}
               </button>
+              <button
+                className={`record-btn stop-btn ${
+                  stopConfirmPending ? "confirm" : ""
+                }`}
+                onClick={onStopRecording}
+                title={
+                  stopConfirmPending
+                    ? "Click again to confirm stop"
+                    : "Stop recording"
+                }
+              >
+                <svg
+                  width="10"
+                  height="10"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  xmlns="http://www.w3.org/2000/svg"
+                  aria-hidden="true"
+                >
+                  <rect x="4" y="4" width="16" height="16" rx="2" />
+                </svg>
+              </button>
+              </>
             ) : effectiveProcessingProgress ? (
               <span className="recording-progress-text">
                 {effectiveProcessingProgress.replace(/\.+$/, "")}

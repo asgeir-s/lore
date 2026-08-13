@@ -703,6 +703,34 @@ fn stop_recording(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn pause_recording(state: State<AppState>) -> Result<(), String> {
+    let rec = state.recording.lock().map_err(|e| e.to_string())?;
+    let st = rec.state();
+    if !st.active {
+        return Err("No recording in progress".to_string());
+    }
+    if st.paused {
+        return Err("Recording is already paused".to_string());
+    }
+    rec.pause();
+    Ok(())
+}
+
+#[tauri::command]
+fn resume_recording(state: State<AppState>) -> Result<(), String> {
+    let rec = state.recording.lock().map_err(|e| e.to_string())?;
+    let st = rec.state();
+    if !st.active {
+        return Err("No recording in progress".to_string());
+    }
+    if !st.paused {
+        return Err("Recording is not paused".to_string());
+    }
+    rec.resume();
+    Ok(())
+}
+
+#[tauri::command]
 fn get_recording_state(state: State<AppState>) -> Result<recording::RecordingState, String> {
     let rec = state.recording.lock().map_err(|e| e.to_string())?;
     Ok(rec.state())
@@ -848,6 +876,8 @@ pub fn run() {
             retranscribe_note,
             resummarize_note,
             stop_recording,
+            pause_recording,
+            resume_recording,
             get_recording_state,
             check_pending_jobs,
             get_model_settings,
