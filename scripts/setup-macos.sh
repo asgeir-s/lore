@@ -38,10 +38,10 @@ fi
 # Download a whisper model if none exists
 MODEL_DIR="$HOME/.local/share/whisper-cpp/models"
 if [ ! -d "$MODEL_DIR" ] || [ -z "$(ls -A "$MODEL_DIR" 2>/dev/null)" ]; then
-  echo "Downloading whisper model (ggml-large-v3-turbo, ~1.6 GB)..."
+  echo "Downloading whisper model (ggml-large-v3, ~3.1 GB)..."
   mkdir -p "$MODEL_DIR"
-  curl -L -o "$MODEL_DIR/ggml-large-v3-turbo.bin" \
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
+  curl -L -o "$MODEL_DIR/ggml-large-v3.bin" \
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin"
 else
   echo "Whisper model already exists in $MODEL_DIR"
 fi

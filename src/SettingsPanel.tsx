@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { writeText as tauriWriteClipboard } from "@tauri-apps/plugin-clipboard-manager";
 import { listInputDevices } from "./api";
 import type {
   ToolStatus,
@@ -82,6 +83,76 @@ function formatSize(bytes: number | null): string {
   if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
   if (bytes >= 1_000_000) return `${Math.round(bytes / 1_000_000)} MB`;
   return `${Math.round(bytes / 1_000)} KB`;
+}
+
+function CopyIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+
+interface CopyableCommandProps {
+  command: string;
+}
+
+function CopyableCommand({ command }: CopyableCommandProps) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    try {
+      await tauriWriteClipboard(command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }, [command]);
+
+  return (
+    <div className="settings-cmd-row">
+      <code className="settings-cmd-text">{command}</code>
+      <button
+        type="button"
+        className="settings-cmd-copy"
+        onClick={handleCopy}
+        title={copied ? "Copied" : "Copy"}
+        aria-label={copied ? "Copied" : "Copy command to clipboard"}
+      >
+        {copied ? <CheckIcon /> : <CopyIcon />}
+      </button>
+    </div>
+  );
 }
 
 export function SettingsPanel({
@@ -284,8 +355,8 @@ export function SettingsPanel({
           <div className="settings-section-title">Models</div>
           <div className="settings-tool-desc">
             Ollama models are picked up from a locally running Ollama instance.
-            Whisper models are scanned from standard whisper-cpp install
-            locations.{" "}
+            Whisper models are <code>.bin</code> files in{" "}
+            <code>~/.local/share/whisper-cpp/models/</code>.{" "}
             {(!toolStatus.ollama || !toolStatus.whisper) && (
               <>See <em>Missing Tools</em> below to install what&apos;s needed.</>
             )}
@@ -345,6 +416,37 @@ export function SettingsPanel({
               </option>
             ))}
           </select>
+          {toolStatus.whisper && whisperModels.length === 0 && (
+            <p className="settings-tool-desc">
+              No Whisper models found in{" "}
+              <code>~/.local/share/whisper-cpp/models/</code>. Download one
+              below to enable transcription.
+            </p>
+          )}
+          {!toolStatus.whisper && (
+            <p className="settings-tool-desc">
+              Install <code>whisper-cli</code> first — see Missing Tools below.
+            </p>
+          )}
+          <div className="settings-install-section" style={{ marginTop: 8 }}>
+            <span className="settings-install-label">
+              Download a model (recommended:{" "}
+              <code>ggml-large-v3.bin</code>, ~3.1 GB):
+            </span>
+            <CopyableCommand command="curl -L -o ~/.local/share/whisper-cpp/models/ggml-large-v3.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin" />
+            <span className="settings-install-label">
+              Browse other sizes (tiny / base / small / medium / large-v3) on{" "}
+              <a
+                href="https://huggingface.co/ggerganov/whisper.cpp/tree/main"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: "var(--accent)" }}
+              >
+                ggerganov/whisper.cpp
+              </a>
+              .
+            </span>
+          </div>
         </div>
 
         {TOOLS.some((t) => !toolStatus[t.key]) && (

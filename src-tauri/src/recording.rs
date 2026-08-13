@@ -1505,8 +1505,8 @@ async fn find_whisper_model(override_name: Option<&str>) -> Option<PathBuf> {
     }
 
     let preferred = [
-        "ggml-large-v3-turbo.bin",
         "ggml-large-v3.bin",
+        "ggml-large-v3-turbo.bin",
         "ggml-medium.bin",
         "whisper-medium-q4_1.bin",
         "ggml-small.bin",
