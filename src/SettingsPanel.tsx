@@ -430,12 +430,11 @@ export function SettingsPanel({
           )}
           <div className="settings-install-section" style={{ marginTop: 8 }}>
             <span className="settings-install-label">
-              Download a model (recommended:{" "}
-              <code>ggml-large-v3.bin</code>, ~3.1 GB):
+              Sample download command:
             </span>
             <CopyableCommand command="curl -L -o ~/.local/share/whisper-cpp/models/ggml-large-v3.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin" />
             <span className="settings-install-label">
-              Browse other sizes (tiny / base / small / medium / large-v3) on{" "}
+              Browse other models:{" "}
               <a
                 href="https://huggingface.co/ggerganov/whisper.cpp/tree/main"
                 target="_blank"
@@ -444,7 +443,6 @@ export function SettingsPanel({
               >
                 ggerganov/whisper.cpp
               </a>
-              .
             </span>
           </div>
         </div>
