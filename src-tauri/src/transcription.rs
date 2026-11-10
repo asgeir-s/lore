@@ -2,7 +2,12 @@
 use crate::qmd::cmd;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+mod cache;
+#[cfg(all(test, unix))]
+mod process_tests;
+use cache::Session;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -131,10 +136,10 @@ impl Audio {
     }
 }
 
-struct WorkDir(PathBuf);
-impl Drop for WorkDir {
+struct SliceFile(PathBuf);
+impl Drop for SliceFile {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 
@@ -144,11 +149,21 @@ pub async fn transcribe(
     language: TranscriptionLanguage,
     progress: impl Fn(&str) + Send + Sync,
 ) -> Result<String, String> {
+    transcribe_using(wav, model, language, Path::new("whisper-cli"), progress).await
+}
+
+async fn transcribe_using(
+    wav: &Path,
+    model: &Path,
+    language: TranscriptionLanguage,
+    engine: &Path,
+    progress: impl Fn(&str) + Send + Sync,
+) -> Result<String, String> {
     let audio = Audio::read(wav)?;
-    let work =
-        WorkDir(std::env::temp_dir().join(format!("lore-transcription-{}", uuid::Uuid::new_v4())));
-    std::fs::create_dir_all(&work.0).map_err(|e| e.to_string())?;
     let sections = audio.sections(SECTION_MS);
+    progress("Checking saved transcription progress...");
+    let mut session = Session::open(wav, model, language, engine, &sections).await?;
+    eprintln!("transcription: diagnostics: {}", session.dir.display());
     let mut merged = Vec::new();
     let mut problems = Vec::new();
     for (i, section) in sections.iter().enumerate() {
@@ -162,12 +177,26 @@ pub async fn transcribe(
             section,
             model,
             language,
-            &work.0.join(i.to_string()),
+            engine,
+            &mut session,
             &progress,
         )
-        .await;
+        .await?;
         problems.extend(failed);
         merge_section(&mut merged, segments, section);
+        let mut pending = problems.clone();
+        pending.extend(sections[i + 1..].iter().map(|s| Problem {
+            section: s.clone(),
+            reason: "Pending transcription".into(),
+        }));
+        pending.push(Problem {
+            section: Section {
+                start_ms: 0,
+                end_ms: audio.duration_ms,
+            },
+            reason: "Final coverage validation pending".into(),
+        });
+        session.finish(&merged, &pending)?;
     }
     // Verify the merged result as well: ownership/overlap handling must not
     // introduce a hole that was absent in the individual outputs.
@@ -181,11 +210,13 @@ pub async fn transcribe(
             reason: "Detected speech has no corresponding transcript".into(),
         });
     }
+    session.finish(&merged, &problems)?;
     if problems.is_empty() {
         Ok(render(&merged))
     } else {
         Err(format!(
-            "Transcription incomplete: {}",
+            "Transcription incomplete. Partial output and diagnostics: {}. Missing ranges: {}",
+            session.dir.display(),
             problems
                 .iter()
                 .map(|p| format!(
@@ -207,56 +238,87 @@ async fn recover_section(
     section: &Section,
     model: &Path,
     language: TranscriptionLanguage,
-    base: &Path,
+    engine: &Path,
+    session: &mut Session,
     progress: &(impl Fn(&str) + Send + Sync),
-) -> (Vec<Segment>, Vec<Problem>) {
-    let reason = match run_section(audio, section, model, language, base).await {
-        Ok(segments) => match validate_section(&segments)
-            .and_then(|_| validate_coverage(audio, &segments, section))
-        {
-            Ok(()) => return (segments, Vec::new()),
-            Err(reason) => reason,
-        },
-        Err(reason) => reason,
-    };
+) -> Result<(Vec<Segment>, Vec<Problem>), String> {
+    if let Some(saved) = cached_section(session, audio, section) {
+        progress(&format!(
+            "Reusing saved section {}–{}...",
+            timestamp(section.start_ms),
+            timestamp(section.end_ms)
+        ));
+        return Ok((saved, Vec::new()));
+    }
+    if !session.has_retry_parts(section) {
+        let result = run_section(audio, section, model, language, engine, &session.attempts)
+            .await
+            .and_then(|segments| {
+                validate_section(&segments)?;
+                validate_coverage(audio, &segments, section)?;
+                Ok(segments)
+            });
+        match result {
+            Ok(segments) => {
+                session.store(section, &segments)?;
+                return Ok((segments, Vec::new()));
+            }
+            Err(reason) => eprintln!(
+                "transcription: retry {}–{}: {reason}",
+                timestamp(section.start_ms),
+                timestamp(section.end_ms)
+            ),
+        }
+    }
     progress(&format!(
         "Retrying {}–{} in smaller sections...",
         timestamp(section.start_ms),
         timestamp(section.end_ms)
     ));
-    eprintln!(
-        "transcription: retry {}–{}: {reason}",
-        timestamp(section.start_ms),
-        timestamp(section.end_ms)
-    );
     let mut merged = Vec::new();
     let mut problems = Vec::new();
-    for (index, part) in retry_parts(section).iter().enumerate() {
-        let result = run_section(
-            audio,
-            part,
-            model,
-            language,
-            &base.with_file_name(format!(
-                "{}-retry-{index}",
-                base.file_name().unwrap().to_string_lossy()
-            )),
-        )
-        .await
-        .and_then(|segments| {
-            validate_section(&segments)?;
-            validate_coverage(audio, &segments, part)?;
-            Ok(segments)
-        });
+    for part in retry_parts(section) {
+        let result = if let Some(saved) = cached_section(session, audio, &part) {
+            Ok(saved)
+        } else {
+            run_section(audio, &part, model, language, engine, &session.attempts)
+                .await
+                .and_then(|segments| {
+                    validate_section(&segments)?;
+                    validate_coverage(audio, &segments, &part)?;
+                    Ok(segments)
+                })
+        };
         match result {
-            Ok(segments) => merge_section(&mut merged, segments, part),
+            Ok(segments) => {
+                session.store(&part, &segments)?;
+                merge_section(&mut merged, segments, &part);
+            }
             Err(reason) => problems.push(Problem {
-                section: part.clone(),
+                section: part,
                 reason,
             }),
         }
     }
-    (merged, problems)
+    if problems.is_empty() {
+        session.store(section, &merged)?;
+    }
+    Ok((merged, problems))
+}
+
+fn cached_section(session: &Session, audio: &Audio, section: &Section) -> Option<Vec<Segment>> {
+    let segments = session.get(section)?;
+    validate_section(&segments).ok()?;
+    validate_coverage(audio, &segments, section).ok()?;
+    if segments.iter().any(|s| {
+        s.end_ms <= s.start_ms
+            || s.end_ms > audio.duration_ms
+            || s.start_ms < section.start_ms.saturating_sub(OVERLAP_MS)
+            || s.end_ms > section.end_ms.saturating_add(OVERLAP_MS)
+    }) {
+        return None;
+    }
+    Some(segments)
 }
 
 fn voice_frames(samples: &[i16]) -> Result<Vec<bool>, String> {
@@ -407,35 +469,61 @@ async fn run_section(
     section: &Section,
     model: &Path,
     language: TranscriptionLanguage,
-    base: &Path,
+    engine: &Path,
+    attempts: &Path,
 ) -> Result<Vec<Segment>, String> {
     let start = section.start_ms.saturating_sub(OVERLAP_MS);
     let end = (section.end_ms + OVERLAP_MS).min(audio.duration_ms);
-    let slice = base.with_extension("wav");
-    audio.write_slice(&slice, start, end)?;
-    let output = tokio::time::timeout(
+    // Unique for every attempt, including retries: stale JSON can never be
+    // mistaken for the output of a failed process.
+    let base = attempts.join(format!(
+        "{}-{}-{}",
+        section.start_ms,
+        section.end_ms,
+        uuid::Uuid::new_v4()
+    ));
+    let slice = SliceFile(base.with_extension("wav"));
+    audio.write_slice(&slice.0, start, end)?;
+    let stdout =
+        std::fs::File::create(base.with_extension("stdout.log")).map_err(|e| e.to_string())?;
+    let stderr =
+        std::fs::File::create(base.with_extension("stderr.log")).map_err(|e| e.to_string())?;
+    let started = Instant::now();
+    let result = tokio::time::timeout(
         Duration::from_secs(300),
-        cmd("whisper-cli")
+        cmd(&engine.to_string_lossy())
             .kill_on_drop(true)
-            .args(["-m"])
+            .arg("-m")
             .arg(model)
             .arg("-f")
-            .arg(&slice)
+            .arg(&slice.0)
             .args(["-l", language.as_arg(), "-mc", "0", "-oj", "-of"])
-            .arg(base)
-            .output(),
+            .arg(&base)
+            .stdout(stdout)
+            .stderr(stderr)
+            .status(),
     )
-    .await
-    .map_err(|_| "Whisper section timed out after five minutes".to_string())?
-    .map_err(|e| format!("Start whisper-cli: {e}"))?;
-    if !output.status.success() {
+    .await;
+    cache::write_json(
+        &base.with_extension("attempt.json"),
+        &serde_json::json!({
+            "section": section, "slice_start_ms": start, "slice_end_ms": end,
+            "language": language, "model": model, "elapsed_ms": started.elapsed().as_millis(),
+            "timed_out": result.is_err(),
+            "exit_code": result.as_ref().ok().and_then(|r| r.as_ref().ok()).and_then(|s| s.code()),
+        }),
+    )?;
+    let status = result
+        .map_err(|_| format!("Whisper section timed out; logs: {}", base.display()))?
+        .map_err(|e| format!("Start whisper-cli: {e}"))?;
+    if !status.success() {
         return Err(format!(
-            "Whisper section failed: {}",
-            String::from_utf8_lossy(&output.stderr)
+            "Whisper section failed ({status}); logs: {}",
+            base.display()
         ));
     }
     let json = std::fs::read_to_string(base.with_extension("json"))
-        .map_err(|e| format!("Read timed Whisper output: {e}"))?;
+        .map_err(|e| format!("Read timed Whisper output: {e}; logs: {}", base.display()))?;
     parse_segments(&json, start, end - start)
 }
 

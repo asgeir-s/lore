@@ -726,6 +726,19 @@ export default function App() {
           (event: {
             payload: { note_id: string; stage: string; detail: string };
           }) => {
+            if (event.payload.stage === "failed") {
+              const noteId = event.payload.note_id;
+              const panelId = recordingNoteToPanelRef.current.get(noteId);
+              setProcessingProgressByNote((prev) => {
+                const next = { ...prev }; delete next[noteId]; return next;
+              });
+              if (panelId) setProcessingProgressByPanel((prev) => {
+                const next = { ...prev }; delete next[panelId]; return next;
+              });
+              pendingRecordingPanelsByNoteRef.current.delete(noteId);
+              recordingNoteToPanelRef.current.delete(noteId);
+              return;
+            }
             setProcessingProgressByNote((prev) => ({
               ...prev,
               [event.payload.note_id]: event.payload.detail,
@@ -858,7 +871,6 @@ export default function App() {
               clearTimeout(recordingCloseWarningTimeout.current);
             }
             setRecordingCloseWarningIndex(null);
-            pendingRecordingPanelsByNoteRef.current.clear();
             pendingRecordingPanelRef.current = null;
           },
         );

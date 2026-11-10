@@ -79,6 +79,12 @@ pub struct RecordingJob {
     pub import_tags: Vec<String>,
     #[serde(default)]
     pub transcription_language: TranscriptionLanguage,
+    #[serde(default)]
+    pub whisper_model: Option<String>,
+    #[serde(default)]
+    pub summary_model: Option<String>,
+    #[serde(default)]
+    pub last_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -377,6 +383,9 @@ async fn run_worker(
                     import_title: None,
                     import_tags: Vec::new(),
                     transcription_language,
+                    whisper_model: whisper_model.clone(),
+                    summary_model: summary_model.clone(),
+                    last_error: None,
                 };
                 if let Err(e) = job.save() {
                     eprintln!("recording: failed to save job file: {e}");
@@ -1109,6 +1118,9 @@ async fn import_audio_source(
         import_title: clean_import_title(import_metadata.title),
         import_tags: clean_import_tags(import_metadata.tags),
         transcription_language: import_metadata.transcription_language,
+        whisper_model: whisper_model_override.map(str::to_owned),
+        summary_model: summary_model_override.map(str::to_owned),
+        last_error: None,
     };
     if let Err(e) = job.save() {
         eprintln!("recording: failed to save imported audio job: {e}");
@@ -1122,7 +1134,10 @@ async fn import_audio_source(
     )
     .await;
 
-    Ok(())
+    match job.last_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 fn safe_extension(file_name: &str) -> String {
@@ -1231,6 +1246,15 @@ async fn process_recording(
     summary_model_override: Option<&str>,
     whisper_model_override: Option<&str>,
 ) {
+    let whisper_model = whisper_model_override
+        .map(str::to_owned)
+        .or(job.whisper_model.clone());
+    let summary_model = summary_model_override
+        .map(str::to_owned)
+        .or(job.summary_model.clone());
+    let whisper_model_override = whisper_model.as_deref();
+    let summary_model_override = summary_model.as_deref();
+    job.last_error = None;
     let mic_path = PathBuf::from(&job.mic_path);
     let system_path = PathBuf::from(&job.system_path);
     let final_wav = PathBuf::from(&job.final_wav_path);
@@ -1261,7 +1285,9 @@ async fn process_recording(
                     "Audio processing failed",
                 )
                 .await;
-                job.delete();
+                job.last_error = Some(format!("Audio mixing failed: {e}"));
+                let _ = job.save();
+                emit_progress(app_handle, &job.note_id, "failed", "Audio mixing failed");
                 return;
             }
         }
@@ -1287,10 +1313,11 @@ async fn process_recording(
                 "transcribing",
                 "Transcribing audio...",
             );
-            let transcript = transcribe(
+            let transcript = transcribe_with_progress(
                 &final_wav,
                 whisper_model_override,
                 job.transcription_language,
+                |detail| emit_progress(app_handle, &job.note_id, "transcribing", detail),
             )
             .await;
 
@@ -1300,19 +1327,14 @@ async fn process_recording(
                 }
                 Err(e) => {
                     eprintln!("recording: transcription failed: {e}");
+                    job.last_error = Some(e.clone());
+                    let _ = job.save();
+                    create_error_note(app_handle, &job.notes_dir, &job.note_id,
+                        &format!("Transcription incomplete. {e}\n\nAudio is saved; retry transcription to resume completed sections."))
+                        .await;
+                    emit_progress(app_handle, &job.note_id, "failed", &e);
                     let _ =
                         app_handle.emit("recording-error", format!("Transcription failed: {e}"));
-                    create_error_note(
-                        app_handle,
-                        &job.notes_dir,
-                        &job.note_id,
-                        &format!(
-                            "Transcription failed. Audio saved at `.recordings/audio/{}.wav`.",
-                            job.note_id
-                        ),
-                    )
-                    .await;
-                    job.delete();
                     return;
                 }
             }
@@ -1373,8 +1395,10 @@ async fn process_recording(
         )
         .await
         {
+            job.last_error = Some(e.clone());
+            let _ = job.save();
+            emit_progress(app_handle, &job.note_id, "failed", &e);
             let _ = app_handle.emit("recording-error", e);
-            job.delete();
             return;
         }
         job.delete();
@@ -1650,10 +1674,19 @@ pub async fn transcribe(
     whisper_model_override: Option<&str>,
     language: TranscriptionLanguage,
 ) -> Result<String, String> {
+    transcribe_with_progress(wav_path, whisper_model_override, language, |_| {}).await
+}
+
+async fn transcribe_with_progress(
+    wav_path: &Path,
+    whisper_model_override: Option<&str>,
+    language: TranscriptionLanguage,
+    progress: impl Fn(&str) + Send + Sync,
+) -> Result<String, String> {
     let model = find_whisper_model(whisper_model_override)
         .await
         .ok_or_else(|| "No whisper model found. Download a ggml model.".to_string())?;
-    crate::transcription::transcribe(wav_path, &model, language, |_| {}).await
+    crate::transcription::transcribe(wav_path, &model, language, progress).await
 }
 
 // ── Summarization ───────────────────────────────────────────────────
@@ -1930,7 +1963,7 @@ pub async fn resume_pending_jobs(app_handle: &tauri::AppHandle, notes_dir: &str)
             "resuming",
             "Resuming processing...",
         );
-        // Resumed jobs use auto-detect (no model override persisted in job file).
+        // The job retains the model and language chosen when it started.
         process_recording(app_handle, &mut job, None, None).await;
     }
 }
@@ -1941,6 +1974,20 @@ async fn create_error_note(
     note_id: &str,
     error_message: &str,
 ) {
+    // Existing notes and transcripts must survive a failed recording/import.
+    let exists = app_handle
+        .try_state::<AppState>()
+        .and_then(|state| {
+            state
+                .index
+                .lock()
+                .ok()
+                .map(|index| index.notes.contains_key(note_id))
+        })
+        .unwrap_or(false);
+    if exists {
+        return;
+    }
     let now = chrono::Local::now();
     let timestamp = now.format("%Y%m%d%H%M%S").to_string();
     let date_display = now.format("%Y-%m-%d %H:%M").to_string();
@@ -1949,7 +1996,7 @@ async fn create_error_note(
     let title_yaml = yaml_scalar_line(&title);
 
     let frontmatter = format!(
-        "---\nid: {note_id}\ntitle: {title_yaml}\ncreated: {created}\nmodified: {created}\ntags:\n  - meeting\ntype: meeting\n---\n"
+        "---\nid: {note_id}\ntitle: {title_yaml}\ncreated: {created}\nmodified: {created}\ntags:\n  - meeting\ntype: meeting\naudio_path: .recordings/audio/{note_id}.wav\n---\n"
     );
 
     let body = format!("# Summary\n\n{error_message}\n");
@@ -1992,15 +2039,7 @@ async fn create_error_note(
     }
 
     let _ = app_handle.emit("notes-changed", ());
-    let _ = app_handle.emit(
-        "recording-complete",
-        RecordingCompletePayload {
-            note_id: note_id.to_string(),
-            summary: None,
-            transcript: None,
-            output: None,
-        },
-    );
+    let _ = app_handle.emit("notes-changed", ());
 }
 
 #[cfg(test)]
