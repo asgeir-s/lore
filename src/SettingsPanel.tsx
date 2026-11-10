@@ -443,9 +443,9 @@ export function SettingsPanel({
             ))}
           </select>
           <p className="settings-tool-desc">
-            Automatic prefers NB-Whisper for Norwegian when installed. Auto-detect
-            and English prefer the multilingual model. An explicit model choice
-            always takes priority.
+            Automatic uses the multilingual model for all languages. NB-Whisper
+            is an optional Norwegian model; select it explicitly to try it.
+            It can produce unreliable timestamps, so review completeness before use.
           </p>
           {toolStatus.whisper && whisperModels.length === 0 && (
             <p className="settings-tool-desc">

@@ -84,14 +84,7 @@ pub fn select(
         compatible(&path)?;
         return Ok(path);
     }
-    let mut preferred = Vec::new();
-    if language == TranscriptionLanguage::No {
-        preferred.extend([
-            "ggml-nb-whisper-large.bin",
-            "ggml-nb-whisper-large-q5_0.bin",
-        ]);
-    }
-    preferred.extend([
+    let preferred = [
         "ggml-large-v3.bin",
         "ggml-large-v3-turbo.bin",
         "ggml-medium.bin",
@@ -99,7 +92,7 @@ pub fn select(
         "ggml-small.bin",
         "ggml-base.bin",
         "ggml-tiny.bin",
-    ]);
+    ];
     // Apply preference across all search directories, not just the first one.
     for name in preferred {
         if let Some(path) = dirs.iter().map(|dir| dir.join(name)).find(|p| p.is_file()) {
@@ -119,7 +112,7 @@ pub fn select(
 mod tests {
     use super::*;
     #[test]
-    fn norwegian_prefers_nb_but_auto_and_english_keep_multilingual_and_explicit_choices_win() {
+    fn automatic_uses_validated_multilingual_model_and_explicit_choices_win() {
         let dir = std::env::temp_dir().join(format!("lore-model-test-{}", uuid::Uuid::new_v4()));
         let later = dir.join("other");
         std::fs::create_dir_all(&later).unwrap();
@@ -130,7 +123,7 @@ mod tests {
         let dirs = vec![dir.clone(), later];
         assert_eq!(
             select(&dirs, None, TranscriptionLanguage::No).unwrap(),
-            norwegian
+            generic
         );
         assert_eq!(
             select(&dirs, None, TranscriptionLanguage::Auto).unwrap(),
@@ -143,6 +136,15 @@ mod tests {
         assert_eq!(
             select(&dirs, Some("ggml-large-v3.bin"), TranscriptionLanguage::No).unwrap(),
             generic
+        );
+        assert_eq!(
+            select(
+                &dirs,
+                Some("ggml-nb-whisper-large.bin"),
+                TranscriptionLanguage::No
+            )
+            .unwrap(),
+            norwegian
         );
         assert!(select(&dirs, Some("missing.bin"), TranscriptionLanguage::No).is_err());
         let english = dir.join("ggml-small.en.bin");

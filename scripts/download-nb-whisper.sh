@@ -40,4 +40,4 @@ curl --fail --location --retry 3 \
   -o "$temporary"
 verify "$temporary"
 mv "$temporary" "$destination"
-echo "Installed NB-Whisper. Choose Norwegian and Automatic, or select NB-Whisper explicitly in Lore Settings."
+echo "Installed NB-Whisper. Choose Norwegian and select NB-Whisper explicitly in Lore Settings."
