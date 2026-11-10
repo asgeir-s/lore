@@ -626,6 +626,28 @@ fn merge_section(merged: &mut Vec<Segment>, segments: Vec<Segment>, section: &Se
         if segment.end_ms <= section.start_ms || segment.start_ms >= section.end_ms {
             continue;
         }
+        // The same boundary utterance may be split into several segments in
+        // one pass and paraphrased slightly in the other. Prefer one coherent
+        // decode when their start times and opening words agree.
+        if segment.start_ms < boundary_end {
+            if let Some(at) = merged.iter().position(|s| s.end_ms > segment.start_ms) {
+                let first = &merged[at];
+                let before = words(&first.text);
+                let after = words(&segment.text);
+                let common = before
+                    .iter()
+                    .zip(&after)
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                if first.start_ms.abs_diff(segment.start_ms) <= 750 && common >= 3 {
+                    if segment.end_ms >= boundary_end {
+                        merged.truncate(at);
+                    } else if segment.end_ms <= first.end_ms {
+                        continue;
+                    }
+                }
+            }
+        }
         // Only deduplicate across section boundaries, never within a section:
         // "yes, yes" may be exactly what was said.
         if segment.start_ms < boundary_end && !context.is_empty() {
@@ -672,6 +694,39 @@ fn render(segments: &[Segment]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlap_prefers_one_complete_utterance_over_conflicting_fragments() {
+        let mut merged = vec![
+            Segment {
+                start_ms: 58_000,
+                end_ms: 59_900,
+                text: "Thank you and good luck".into(),
+            },
+            Segment {
+                start_ms: 59_900,
+                end_ms: 62_500,
+                text: "with the project we discussed".into(),
+            },
+        ];
+        merge_section(
+            &mut merged,
+            vec![Segment {
+                start_ms: 58_100,
+                end_ms: 64_000,
+                text: "Thank you and good luck with the project you showed us.".into(),
+            }],
+            &Section {
+                start_ms: 60_000,
+                end_ms: 120_000,
+            },
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(
+            merged[0].text,
+            "Thank you and good luck with the project you showed us."
+        );
+    }
 
     #[test]
     fn merging_keeps_boundary_utterances_and_legitimate_short_repetition() {
