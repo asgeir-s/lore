@@ -9,6 +9,26 @@ use tokio::sync::mpsc;
 
 // ── Public types ────────────────────────────────────────────────────
 
+/// A stable persisted value; older settings and jobs default to auto-detection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TranscriptionLanguage {
+    #[default]
+    Auto,
+    No,
+    En,
+}
+
+impl TranscriptionLanguage {
+    pub fn as_arg(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::No => "no",
+            Self::En => "en",
+        }
+    }
+}
+
 #[derive(Clone, Serialize)]
 pub struct RecordingState {
     pub active: bool,
@@ -75,12 +95,15 @@ pub struct RecordingJob {
     pub import_title: Option<String>,
     #[serde(default)]
     pub import_tags: Vec<String>,
+    #[serde(default)]
+    pub transcription_language: TranscriptionLanguage,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct AudioImportMetadata {
     pub title: Option<String>,
     pub tags: Vec<String>,
+    pub transcription_language: TranscriptionLanguage,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,6 +231,7 @@ enum Msg {
         preferred_device: Option<String>,
         summary_model: Option<String>,
         whisper_model: Option<String>,
+        transcription_language: TranscriptionLanguage,
     },
     Pause,
     Resume,
@@ -267,6 +291,7 @@ impl RecordingHandle {
         preferred_device: Option<String>,
         summary_model: Option<String>,
         whisper_model: Option<String>,
+        transcription_language: TranscriptionLanguage,
     ) {
         let _ = self.tx.send(Msg::Start {
             note_id: note_id.to_string(),
@@ -274,6 +299,7 @@ impl RecordingHandle {
             preferred_device,
             summary_model,
             whisper_model,
+            transcription_language,
         });
     }
 
@@ -321,6 +347,7 @@ async fn run_worker(
                 preferred_device,
                 summary_model,
                 whisper_model,
+                transcription_language,
             }) => {
                 let audio_dir = crate::notes::meeting_audio_dir(&notes_dir);
                 if let Err(e) = std::fs::create_dir_all(&audio_dir) {
@@ -367,6 +394,7 @@ async fn run_worker(
                     output_mode: None,
                     import_title: None,
                     import_tags: Vec::new(),
+                    transcription_language,
                 };
                 if let Err(e) = job.save() {
                     eprintln!("recording: failed to save job file: {e}");
@@ -1098,6 +1126,7 @@ async fn import_audio_source(
         output_mode: Some(import_mode.as_job_value().to_string()),
         import_title: clean_import_title(import_metadata.title),
         import_tags: clean_import_tags(import_metadata.tags),
+        transcription_language: import_metadata.transcription_language,
     };
     if let Err(e) = job.save() {
         eprintln!("recording: failed to save imported audio job: {e}");
@@ -1276,7 +1305,12 @@ async fn process_recording(
                 "transcribing",
                 "Transcribing audio...",
             );
-            let transcript = transcribe(&final_wav, whisper_model_override).await;
+            let transcript = transcribe(
+                &final_wav,
+                whisper_model_override,
+                job.transcription_language,
+            )
+            .await;
 
             match transcript {
                 Ok(t) => {
@@ -1632,6 +1666,7 @@ async fn find_whisper_model(override_name: Option<&str>) -> Option<PathBuf> {
 pub async fn transcribe(
     wav_path: &Path,
     whisper_model_override: Option<&str>,
+    language: TranscriptionLanguage,
 ) -> Result<String, String> {
     let model = find_whisper_model(whisper_model_override)
         .await
@@ -1653,7 +1688,7 @@ pub async fn transcribe(
             "-f",
             &wav_str,
             "-l",
-            "auto",
+            language.as_arg(),
             "-oj",
             "-of",
             &output_base_str,

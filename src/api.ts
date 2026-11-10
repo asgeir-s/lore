@@ -493,6 +493,7 @@ export interface ModelSettings {
   keyword_model: string | null;
   summary_model: string | null;
   whisper_model: string | null;
+  transcription_language: "auto" | "no" | "en";
 }
 
 export interface OllamaModelInfo {
@@ -512,7 +513,7 @@ export async function getModelSettings(): Promise<ModelSettings> {
   if (isTauri()) {
     return invoke<ModelSettings>("get_model_settings");
   }
-  return { keyword_model: null, summary_model: null, whisper_model: null };
+  return { keyword_model: null, summary_model: null, whisper_model: null, transcription_language: "auto" };
 }
 
 export async function setModelSettings(settings: ModelSettings): Promise<void> {

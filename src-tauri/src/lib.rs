@@ -21,6 +21,8 @@ pub struct ModelSettings {
     pub keyword_model: Option<String>,
     pub summary_model: Option<String>,
     pub whisper_model: Option<String>,
+    #[serde(default)]
+    pub transcription_language: recording::TranscriptionLanguage,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -495,13 +497,14 @@ async fn import_audio_file(
 ) -> Result<NoteMetadata, String> {
     let note_id = target_note_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let import_mode = recording::AudioImportMode::from_arg(import_mode.as_deref())?;
-    let (notes_dir, summary_model, whisper_model) = {
+    let (notes_dir, summary_model, whisper_model, transcription_language) = {
         let dir = state.notes_dir.lock().map_err(|e| e.to_string())?.clone();
         let models = state.model_settings.lock().map_err(|e| e.to_string())?;
         (
             dir,
             models.summary_model.clone(),
             models.whisper_model.clone(),
+            models.transcription_language,
         )
     };
 
@@ -514,6 +517,7 @@ async fn import_audio_file(
         recording::AudioImportMetadata {
             title,
             tags: tags.unwrap_or_default(),
+            transcription_language,
         },
         summary_model.as_deref(),
         whisper_model.as_deref(),
@@ -536,13 +540,14 @@ async fn import_audio_data(
 ) -> Result<NoteMetadata, String> {
     let note_id = target_note_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let import_mode = recording::AudioImportMode::from_arg(import_mode.as_deref())?;
-    let (notes_dir, summary_model, whisper_model) = {
+    let (notes_dir, summary_model, whisper_model, transcription_language) = {
         let dir = state.notes_dir.lock().map_err(|e| e.to_string())?.clone();
         let models = state.model_settings.lock().map_err(|e| e.to_string())?;
         (
             dir,
             models.summary_model.clone(),
             models.whisper_model.clone(),
+            models.transcription_language,
         )
     };
 
@@ -556,6 +561,7 @@ async fn import_audio_data(
         recording::AudioImportMetadata {
             title,
             tags: tags.unwrap_or_default(),
+            transcription_language,
         },
         summary_model.as_deref(),
         whisper_model.as_deref(),
@@ -606,6 +612,7 @@ fn start_recording(
         device,
         ms.summary_model.clone(),
         ms.whisper_model.clone(),
+        ms.transcription_language,
     );
     Ok(note_id)
 }
@@ -643,18 +650,23 @@ fn append_meeting_data(
 
 #[tauri::command]
 async fn retranscribe_note(state: State<'_, AppState>, id: String) -> Result<NoteMetadata, String> {
-    let (notes_dir, audio_path, whisper_model) = {
+    let (notes_dir, audio_path, whisper_model, language) = {
         let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
         let ms = state.model_settings.lock().map_err(|e| e.to_string())?;
         let audio_path = notes::recording_audio_path(&dir, &id);
-        (dir.clone(), audio_path, ms.whisper_model.clone())
+        (
+            dir.clone(),
+            audio_path,
+            ms.whisper_model.clone(),
+            ms.transcription_language,
+        )
     };
 
     if !audio_path.exists() {
         return Err(format!("Audio file not found: {}", audio_path.display()));
     }
 
-    let transcript = recording::transcribe(&audio_path, whisper_model.as_deref())
+    let transcript = recording::transcribe(&audio_path, whisper_model.as_deref(), language)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -918,6 +930,33 @@ fn dirs_home() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transcription_language_is_backward_compatible_and_round_trips() {
+        let old: ModelSettings =
+            serde_json::from_str(r#"{"whisper_model":"ggml-large-v3.bin"}"#).unwrap();
+        assert_eq!(
+            old.transcription_language,
+            recording::TranscriptionLanguage::Auto
+        );
+        for language in [
+            recording::TranscriptionLanguage::Auto,
+            recording::TranscriptionLanguage::No,
+            recording::TranscriptionLanguage::En,
+        ] {
+            let settings = ModelSettings {
+                transcription_language: language,
+                ..ModelSettings::default()
+            };
+            let json = serde_json::to_string(&settings).unwrap();
+            let loaded: ModelSettings = serde_json::from_str(&json).unwrap();
+            assert_eq!(loaded.transcription_language, language);
+        }
+        assert!(
+            serde_json::from_str::<ModelSettings>(r#"{"transcription_language":"invalid"}"#)
+                .is_err()
+        );
+    }
 
     #[test]
     fn app_settings_round_trip_persists_notes_dir() {

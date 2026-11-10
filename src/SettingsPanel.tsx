@@ -401,6 +401,25 @@ export function SettingsPanel({
             ))}
           </select>
 
+          <label className="settings-model-label" htmlFor="transcription-language">
+            Recording language
+          </label>
+          <select
+            id="transcription-language"
+            className="settings-device-select"
+            value={modelSettings.transcription_language ?? "auto"}
+            onChange={(event) => onModelSettingsChange({
+              ...modelSettings,
+              transcription_language: event.target.value as ModelSettings["transcription_language"],
+            })}
+          >
+            <option value="auto">Auto-detect</option>
+            <option value="no">Norwegian</option>
+            <option value="en">English</option>
+          </select>
+          <p className="settings-tool-desc">
+            Used for new recordings, audio imports, and retranscription.
+          </p>
           <label className="settings-model-label">
             Transcription model (whisper)
           </label>

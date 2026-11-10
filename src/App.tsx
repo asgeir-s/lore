@@ -313,6 +313,7 @@ export default function App() {
     keyword_model: null,
     summary_model: null,
     whisper_model: null,
+    transcription_language: "auto",
   });
   const [ollamaModels, setOllamaModels] = useState<OllamaModelInfo[]>([]);
   const [whisperModels, setWhisperModels] = useState<WhisperModelInfo[]>([]);
