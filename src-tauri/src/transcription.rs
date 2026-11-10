@@ -49,6 +49,9 @@ struct Problem {
 struct Audio {
     samples: Vec<i16>,
     duration_ms: u64,
+    // WebRTC classifies 20 ms frames. VAD verifies coverage; no audio is
+    // discarded, so quiet speakers still reach the recognizer.
+    voice: Vec<bool>,
 }
 
 impl Audio {
@@ -70,9 +73,11 @@ impl Audio {
             return Err("Audio is empty".into());
         }
         let duration_ms = (samples.len() as u64 * 1000).div_ceil(RATE as u64);
+        let voice = voice_frames(&samples)?;
         Ok(Self {
             samples,
             duration_ms,
+            voice,
         })
     }
 
@@ -164,6 +169,18 @@ pub async fn transcribe(
         problems.extend(failed);
         merge_section(&mut merged, segments, section);
     }
+    // Verify the merged result as well: ownership/overlap handling must not
+    // introduce a hole that was absent in the individual outputs.
+    let whole = Section {
+        start_ms: 0,
+        end_ms: audio.duration_ms,
+    };
+    for section in uncovered_speech(&audio.voice, &merged, &whole) {
+        problems.push(Problem {
+            section,
+            reason: "Detected speech has no corresponding transcript".into(),
+        });
+    }
     if problems.is_empty() {
         Ok(render(&merged))
     } else {
@@ -194,7 +211,9 @@ async fn recover_section(
     progress: &(impl Fn(&str) + Send + Sync),
 ) -> (Vec<Segment>, Vec<Problem>) {
     let reason = match run_section(audio, section, model, language, base).await {
-        Ok(segments) => match validate_section(&segments) {
+        Ok(segments) => match validate_section(&segments)
+            .and_then(|_| validate_coverage(audio, &segments, section))
+        {
             Ok(()) => return (segments, Vec::new()),
             Err(reason) => reason,
         },
@@ -226,6 +245,7 @@ async fn recover_section(
         .await
         .and_then(|segments| {
             validate_section(&segments)?;
+            validate_coverage(audio, &segments, part)?;
             Ok(segments)
         });
         match result {
@@ -237,6 +257,108 @@ async fn recover_section(
         }
     }
     (merged, problems)
+}
+
+fn voice_frames(samples: &[i16]) -> Result<Vec<bool>, String> {
+    use webrtc_vad::{SampleRate, Vad, VadMode};
+    let mut vad = Vad::new_with_rate_and_mode(SampleRate::Rate16kHz, VadMode::Quality);
+    samples
+        .chunks(320)
+        .map(|chunk| {
+            let mut frame = [0i16; 320];
+            frame[..chunk.len()].copy_from_slice(chunk);
+            vad.is_voice_segment(&frame)
+                .map_err(|_| "Voice activity detection failed".into())
+        })
+        .collect()
+}
+
+fn validate_coverage(audio: &Audio, segments: &[Segment], section: &Section) -> Result<(), String> {
+    let gaps = uncovered_speech(&audio.voice, segments, section);
+    if gaps.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "Detected speech without text at {}",
+        gaps.iter()
+            .map(|s| format!("{}–{}", timestamp(s.start_ms), timestamp(s.end_ms)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
+fn uncovered_speech(voice: &[bool], segments: &[Segment], section: &Section) -> Vec<Section> {
+    let mut intervals = segments
+        .iter()
+        .filter(|s| is_speech_text(&s.text))
+        .map(|s| (s.start_ms.saturating_sub(750), s.end_ms.saturating_add(750)))
+        .collect::<Vec<_>>();
+    intervals.sort_unstable();
+    let mut coverage: Vec<(u64, u64)> = Vec::new();
+    for (start, end) in intervals {
+        if let Some(last) = coverage.last_mut().filter(|last| last.1 >= start) {
+            last.1 = last.1.max(end);
+        } else {
+            coverage.push((start, end));
+        }
+    }
+    let mut interval = 0;
+    let mut gaps = Vec::new();
+    let mut first = 0;
+    let mut last = 0;
+    let mut active_ms = 0;
+    for (i, &is_voice) in voice.iter().enumerate() {
+        let at = i as u64 * 20;
+        if at < section.start_ms || at >= section.end_ms {
+            continue;
+        }
+        while interval < coverage.len() && coverage[interval].1 <= at {
+            interval += 1;
+        }
+        let covered = coverage
+            .get(interval)
+            .is_some_and(|&(start, end)| start <= at && at < end);
+        if is_voice && !covered {
+            if active_ms > 0 && at > last + 1000 {
+                if active_ms >= 2000 {
+                    gaps.push(Section {
+                        start_ms: first,
+                        end_ms: last + 20,
+                    });
+                }
+                active_ms = 0;
+            }
+            if active_ms == 0 {
+                first = at;
+            }
+            last = at;
+            active_ms += 20;
+        } else if covered && active_ms > 0 {
+            if active_ms >= 2000 {
+                gaps.push(Section {
+                    start_ms: first,
+                    end_ms: last + 20,
+                });
+            }
+            active_ms = 0;
+        }
+    }
+    if active_ms >= 2000 {
+        gaps.push(Section {
+            start_ms: first,
+            end_ms: last + 20,
+        });
+    }
+    gaps
+}
+
+fn is_speech_text(text: &str) -> bool {
+    let key = words(text).join(" ");
+    text.chars().any(char::is_alphabetic)
+        && !matches!(
+            key.as_str(),
+            "blank_audio" | "silence" | "music" | "musikk" | "applause" | "laughter" | "inaudible"
+        )
 }
 
 fn retry_parts(section: &Section) -> Vec<Section> {
@@ -329,6 +451,9 @@ fn parse_segments(json: &str, offset: u64, duration: u64) -> Result<Vec<Segment>
         if text.is_empty() {
             continue;
         }
+        if !is_speech_text(text) {
+            continue;
+        }
         let time = |key| {
             entry["offsets"][key]
                 .as_u64()
@@ -374,40 +499,52 @@ fn words(text: &str) -> Vec<String> {
 }
 
 fn merge_section(merged: &mut Vec<Segment>, segments: Vec<Segment>, section: &Section) {
+    // Keep every segment that intersects its owned interval. Midpoint ownership
+    // can drop a boundary utterance when the two decodes segment it differently.
+    let boundary_end = merged.last().map(|s| s.end_ms).unwrap_or(0);
+    let context = merged
+        .iter()
+        .rev()
+        .take_while(|s| s.end_ms + OVERLAP_MS * 2 >= section.start_ms)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .flat_map(|s| words(&s.text))
+        .collect::<Vec<_>>();
     for mut segment in segments {
-        let middle = segment.start_ms + (segment.end_ms - segment.start_ms) / 2;
-        if middle < section.start_ms || middle >= section.end_ms {
+        if segment.end_ms <= section.start_ms || segment.start_ms >= section.end_ms {
             continue;
         }
-        if let Some(previous) = merged.last() {
-            // Remove only matching words at a real overlap, never repeated speech
-            // elsewhere in the meeting. Segmentation may differ between passes.
-            if previous.end_ms + OVERLAP_MS >= segment.start_ms {
-                let before = words(&previous.text);
-                let after = words(&segment.text);
-                let common = (1..=before.len().min(after.len())).rev().find(|&n| {
-                    before[before.len() - n..] == after[..n]
-                        && (n >= 2 || n == before.len() || n == after.len())
-                });
-                if let Some(n) = common {
-                    segment.text = segment
-                        .text
-                        .split_whitespace()
-                        .skip(n)
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    if segment.text.is_empty() {
-                        continue;
-                    }
-                    segment.start_ms = segment
-                        .start_ms
-                        .max(previous.end_ms)
-                        .min(segment.end_ms - 1);
+        // Only deduplicate across section boundaries, never within a section:
+        // "yes, yes" may be exactly what was said.
+        if segment.start_ms < boundary_end && !context.is_empty() {
+            let after = words(&segment.text);
+            if !after.is_empty()
+                && segment.end_ms <= boundary_end
+                && context.windows(after.len()).any(|window| window == after)
+            {
+                continue;
+            }
+            let common = (1..=context.len().min(after.len())).rev().find(|&n| {
+                context[context.len() - n..] == after[..n]
+                    && (n >= 2 || n == context.len() || n == after.len())
+            });
+            if let Some(n) = common {
+                segment.text = segment
+                    .text
+                    .split_whitespace()
+                    .skip(n)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if segment.text.is_empty() {
+                    continue;
                 }
+                segment.start_ms = segment.start_ms.max(boundary_end).min(segment.end_ms - 1);
             }
         }
         merged.push(segment);
     }
+    merged.sort_by_key(|s| s.start_ms);
 }
 
 fn timestamp(ms: u64) -> String {
@@ -424,6 +561,92 @@ fn render(segments: &[Segment]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merging_keeps_boundary_utterances_and_legitimate_short_repetition() {
+        let mut merged = vec![];
+        merge_section(
+            &mut merged,
+            vec![
+                Segment {
+                    start_ms: 0,
+                    end_ms: 1000,
+                    text: "yes".into(),
+                },
+                Segment {
+                    start_ms: 1000,
+                    end_ms: 2000,
+                    text: "yes".into(),
+                },
+                Segment {
+                    start_ms: 59_000,
+                    end_ms: 62_000,
+                    text: "Boundary utterance".into(),
+                },
+            ],
+            &Section {
+                start_ms: 0,
+                end_ms: 60_000,
+            },
+        );
+        assert_eq!(merged.len(), 3);
+        merge_section(
+            &mut merged,
+            vec![Segment {
+                start_ms: 58_000,
+                end_ms: 60_200,
+                text: "A differently segmented thought".into(),
+            }],
+            &Section {
+                start_ms: 60_000,
+                end_ms: 120_000,
+            },
+        );
+        assert!(merged
+            .iter()
+            .any(|s| s.text == "A differently segmented thought"));
+    }
+
+    #[test]
+    fn coverage_finds_missing_start_middle_and_end_but_allows_silence() {
+        let section = Section {
+            start_ms: 0,
+            end_ms: 60_000,
+        };
+        let voice = vec![true; 3000];
+        let segment = |start_ms, end_ms| Segment {
+            start_ms,
+            end_ms,
+            text: "Meaningful speech".into(),
+        };
+        assert!(!uncovered_speech(&voice, &[segment(10_000, 60_000)], &section).is_empty());
+        assert!(!uncovered_speech(
+            &voice,
+            &[segment(0, 20_000), segment(30_000, 60_000)],
+            &section
+        )
+        .is_empty());
+        assert!(!uncovered_speech(&voice, &[segment(0, 40_000)], &section).is_empty());
+        let mut trailing_silence = voice.clone();
+        trailing_silence[2000..].fill(false);
+        assert!(uncovered_speech(&trailing_silence, &[segment(0, 40_000)], &section).is_empty());
+        assert!(uncovered_speech(&vec![false; 3000], &[], &section).is_empty());
+        assert!(!uncovered_speech(
+            &voice,
+            &[Segment {
+                start_ms: 0,
+                end_ms: 60_000,
+                text: "[BLANK_AUDIO]".into()
+            }],
+            &section
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn vad_accepts_silence_and_partial_final_frame() {
+        assert_eq!(voice_frames(&[0; 321]).unwrap(), vec![false, false]);
+    }
 
     #[test]
     fn detects_the_actual_cutoff_loop_and_alternating_loops() {
@@ -483,6 +706,7 @@ mod tests {
         let audio = Audio {
             samples: vec![0; RATE as usize * 131],
             duration_ms: 131_000,
+            voice: vec![false; 6550],
         };
         let sections = audio.sections(SECTION_MS);
         assert_eq!(sections.first().unwrap().start_ms, 0);
