@@ -40,6 +40,12 @@ struct Segment {
     text: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Problem {
+    section: Section,
+    reason: String,
+}
+
 struct Audio {
     samples: Vec<i16>,
     duration_ms: u64,
@@ -139,23 +145,139 @@ pub async fn transcribe(
     std::fs::create_dir_all(&work.0).map_err(|e| e.to_string())?;
     let sections = audio.sections(SECTION_MS);
     let mut merged = Vec::new();
+    let mut problems = Vec::new();
     for (i, section) in sections.iter().enumerate() {
         progress(&format!(
             "Transcribing section {} of {}...",
             i + 1,
             sections.len()
         ));
-        let segments = run_section(
+        let (segments, failed) = recover_section(
             &audio,
             section,
             model,
             language,
             &work.0.join(i.to_string()),
+            &progress,
         )
-        .await?;
+        .await;
+        problems.extend(failed);
         merge_section(&mut merged, segments, section);
     }
-    Ok(render(&merged))
+    if problems.is_empty() {
+        Ok(render(&merged))
+    } else {
+        Err(format!(
+            "Transcription incomplete: {}",
+            problems
+                .iter()
+                .map(|p| format!(
+                    "{}–{} ({})",
+                    timestamp(p.section.start_ms),
+                    timestamp(p.section.end_ms),
+                    p.reason
+                ))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ))
+    }
+}
+
+// At most one full-section attempt and one attempt per 30-second part. A bad
+// section cannot monopolize a meeting, and later sections are still processed.
+async fn recover_section(
+    audio: &Audio,
+    section: &Section,
+    model: &Path,
+    language: TranscriptionLanguage,
+    base: &Path,
+    progress: &(impl Fn(&str) + Send + Sync),
+) -> (Vec<Segment>, Vec<Problem>) {
+    let reason = match run_section(audio, section, model, language, base).await {
+        Ok(segments) => match validate_section(&segments) {
+            Ok(()) => return (segments, Vec::new()),
+            Err(reason) => reason,
+        },
+        Err(reason) => reason,
+    };
+    progress(&format!(
+        "Retrying {}–{} in smaller sections...",
+        timestamp(section.start_ms),
+        timestamp(section.end_ms)
+    ));
+    eprintln!(
+        "transcription: retry {}–{}: {reason}",
+        timestamp(section.start_ms),
+        timestamp(section.end_ms)
+    );
+    let mut merged = Vec::new();
+    let mut problems = Vec::new();
+    for (index, part) in retry_parts(section).iter().enumerate() {
+        let result = run_section(
+            audio,
+            part,
+            model,
+            language,
+            &base.with_file_name(format!(
+                "{}-retry-{index}",
+                base.file_name().unwrap().to_string_lossy()
+            )),
+        )
+        .await
+        .and_then(|segments| {
+            validate_section(&segments)?;
+            Ok(segments)
+        });
+        match result {
+            Ok(segments) => merge_section(&mut merged, segments, part),
+            Err(reason) => problems.push(Problem {
+                section: part.clone(),
+                reason,
+            }),
+        }
+    }
+    (merged, problems)
+}
+
+fn retry_parts(section: &Section) -> Vec<Section> {
+    (section.start_ms..section.end_ms)
+        .step_by(30_000)
+        .map(|start_ms| Section {
+            start_ms,
+            end_ms: (start_ms + 30_000).min(section.end_ms),
+        })
+        .collect()
+}
+
+fn validate_section(segments: &[Segment]) -> Result<(), String> {
+    // Check raw segments, before overlap removal could hide a decoder loop.
+    let keys = segments.iter().map(|s| words(&s.text)).collect::<Vec<_>>();
+    for period in 1..=4 {
+        let count = if period == 1 { 4 } else { 3 };
+        let size = period * count;
+        for window in keys.windows(size) {
+            if window[..period].iter().map(Vec::len).sum::<usize>() < 3 {
+                continue;
+            }
+            if (period..size).all(|i| window[i] == window[i % period]) {
+                return Err("Repeated text suggests a recognition loop".into());
+            }
+        }
+    }
+    // A loop can also be contained inside one long segment.
+    for key in &keys {
+        for period in 3..=12 {
+            for window in key.windows(period * 4) {
+                if (period..window.len()).all(|i| window[i] == window[i % period]) {
+                    return Err("Repeated phrase inside a transcript segment".into());
+                }
+            }
+        }
+    }
+    if segments.windows(2).any(|s| s[1].start_ms < s[0].start_ms) {
+        return Err("Transcript timestamps moved backwards".into());
+    }
+    Ok(())
 }
 
 async fn run_section(
@@ -302,6 +424,59 @@ fn render(segments: &[Segment]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_the_actual_cutoff_loop_and_alternating_loops() {
+        let phrase = "Her er hvordan det ser ut når dere innlager.";
+        let segments = (0..32)
+            .map(|i| Segment {
+                start_ms: 414_040 + i * 2000,
+                end_ms: 416_040 + i * 2000,
+                text: phrase.into(),
+            })
+            .collect::<Vec<_>>();
+        assert!(validate_section(&segments).is_err());
+        let alternating = ["First repeated sentence", "Second repeated sentence"]
+            .iter()
+            .cycle()
+            .take(6)
+            .enumerate()
+            .map(|(i, text)| Segment {
+                start_ms: i as u64 * 1000,
+                end_ms: i as u64 * 1000 + 1000,
+                text: (*text).into(),
+            })
+            .collect::<Vec<_>>();
+        assert!(validate_section(&alternating).is_err());
+        assert!(validate_section(&segments[..2]).is_ok());
+        let inline = vec![Segment {
+            start_ms: 0,
+            end_ms: 30_000,
+            text: "We should do this. ".repeat(10),
+        }];
+        assert!(validate_section(&inline).is_err());
+    }
+
+    #[test]
+    fn retry_ranges_are_bounded_and_cover_only_the_failed_section() {
+        let parts = retry_parts(&Section {
+            start_ms: 59_000,
+            end_ms: 118_500,
+        });
+        assert_eq!(
+            parts,
+            vec![
+                Section {
+                    start_ms: 59_000,
+                    end_ms: 89_000
+                },
+                Section {
+                    start_ms: 89_000,
+                    end_ms: 118_500
+                }
+            ]
+        );
+    }
 
     #[test]
     fn section_plan_covers_entire_audio_without_gaps() {
