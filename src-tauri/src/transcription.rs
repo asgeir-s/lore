@@ -8,6 +8,7 @@ mod cache;
 pub mod models;
 #[cfg(all(test, unix))]
 mod process_tests;
+mod vad;
 use cache::Session;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,7 +56,7 @@ struct Problem {
 struct Audio {
     samples: Vec<i16>,
     duration_ms: u64,
-    // WebRTC classifies 20 ms frames. VAD verifies coverage; no audio is
+    // VAD classifies 20 ms frames for coverage; no audio is
     // discarded, so quiet speakers still reach the recognizer.
     voice: Vec<bool>,
 }
@@ -150,7 +151,16 @@ pub async fn transcribe(
     language: TranscriptionLanguage,
     progress: impl Fn(&str) + Send + Sync,
 ) -> Result<String, String> {
-    transcribe_using(wav, model, language, Path::new("whisper-cli"), progress).await
+    let detector = vad::Detector::find();
+    transcribe_using(
+        wav,
+        model,
+        language,
+        Path::new("whisper-cli"),
+        detector.as_ref(),
+        progress,
+    )
+    .await
 }
 
 async fn transcribe_using(
@@ -158,13 +168,24 @@ async fn transcribe_using(
     model: &Path,
     language: TranscriptionLanguage,
     engine: &Path,
+    detector: Option<&vad::Detector>,
     progress: impl Fn(&str) + Send + Sync,
 ) -> Result<String, String> {
-    let audio = Audio::read(wav)?;
+    let mut audio = Audio::read(wav)?;
     let sections = audio.sections(SECTION_MS);
     progress("Checking saved transcription progress...");
     let mut session = Session::open(wav, model, language, engine, &sections).await?;
     eprintln!("transcription: diagnostics: {}", session.dir.display());
+    if let Some(detector) = detector {
+        progress("Checking speech activity...");
+        match detector
+            .voice_frames(wav, audio.duration_ms, &session.attempts)
+            .await
+        {
+            Ok(voice) => audio.voice = voice,
+            Err(reason) => eprintln!("transcription: using WebRTC coverage check: {reason}"),
+        }
+    }
     let mut merged = Vec::new();
     let mut problems = Vec::new();
     for (i, section) in sections.iter().enumerate() {

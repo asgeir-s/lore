@@ -1437,7 +1437,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
                   >
                     {transcriptionError && (
                       <p className="transcript-error" role="alert">
-                        <strong>Transcription incomplete.</strong> {transcriptionError}
+                        {transcriptionError}
                         {meetingHasAudio && " Use ↻ in the Transcript tab to retry."}
                       </p>
                     )}

@@ -88,6 +88,17 @@ else
   echo "whisper-cpp package not found in apt repositories; skipping."
 fi
 
+# Coverage verification only; transcription still receives all recorded audio.
+MODEL_DIR="$HOME/.local/share/whisper-cpp/models"
+VAD_MODEL="$MODEL_DIR/ggml-silero-v6.2.0.bin"
+if command -v whisper-vad-speech-segments >/dev/null 2>&1 && [ ! -s "$VAD_MODEL" ]; then
+  echo "Downloading speech detector (~865 KB)..."
+  mkdir -p "$MODEL_DIR"
+  curl -fL --retry 2 -o "$VAD_MODEL.part" \
+    "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin"
+  mv "$VAD_MODEL.part" "$VAD_MODEL"
+fi
+
 # ollama is optional; install when available.
 if ! command -v ollama >/dev/null 2>&1; then
   if curl -fsSL https://ollama.com/install.sh | sh; then

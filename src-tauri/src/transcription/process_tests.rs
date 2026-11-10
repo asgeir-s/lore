@@ -63,7 +63,15 @@ print('Retained recognizer output')
         }
     }
     async fn run(&self, language: TranscriptionLanguage) -> Result<String, String> {
-        transcribe_using(&self.audio, &self.model, language, &self.engine, |_| {}).await
+        transcribe_using(
+            &self.audio,
+            &self.model,
+            language,
+            &self.engine,
+            None,
+            |_| {},
+        )
+        .await
     }
     fn calls(&self) -> usize {
         std::fs::read_to_string(self.dir.join("calls"))
@@ -207,4 +215,49 @@ async fn missing_coverage_keeps_valid_text_in_partial_output_without_caching_it_
     assert!(partial.contains("Accepted speech for section 30000"));
     assert!(partial.contains("INCOMPLETE"));
     assert!(!session.dir.join("transcript.md").exists());
+}
+
+#[tokio::test]
+async fn neural_coverage_is_used_and_failed_detection_falls_back_to_webrtc() {
+    let f = Fixture::new("missing");
+    let helper = f.dir.join("fake-vad");
+    std::fs::write(&helper, "#!/bin/sh\nprintf 'Detected 1 speech segments:\\nSpeech segment 0: start = 0.00, end = 6000.00\\n'\n").unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let detector = vad::Detector {
+        engine: helper.clone(),
+        model: f.model.clone(),
+    };
+    let result = transcribe_using(
+        &f.audio,
+        &f.model,
+        TranscriptionLanguage::En,
+        &f.engine,
+        Some(&detector),
+        |_| {},
+    )
+    .await;
+    assert!(result.unwrap_err().contains("Detected speech"));
+    assert_eq!(f.calls(), 3);
+    // A failing helper's empty-speech output must not be accepted as evidence.
+    std::fs::write(
+        &helper,
+        "#!/bin/sh\nprintf 'Detected 0 speech segments:\\n'\nexit 9\n",
+    )
+    .unwrap();
+    assert!(detector
+        .voice_frames(&f.audio, 60_000, &f.dir)
+        .await
+        .is_err());
+    // The fixture is silent, so WebRTC permits completion despite missing text.
+    transcribe_using(
+        &f.audio,
+        &f.model,
+        TranscriptionLanguage::En,
+        &f.engine,
+        Some(&detector),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(f.calls(), 4);
 }

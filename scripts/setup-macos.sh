@@ -46,6 +46,16 @@ else
   echo "Whisper model already exists in $MODEL_DIR"
 fi
 
+# Coverage verification only; transcription still receives all recorded audio.
+VAD_MODEL="$MODEL_DIR/ggml-silero-v6.2.0.bin"
+if command -v whisper-vad-speech-segments >/dev/null 2>&1 && [ ! -s "$VAD_MODEL" ]; then
+  echo "Downloading speech detector (~865 KB)..."
+  mkdir -p "$MODEL_DIR"
+  curl -fL --retry 2 -o "$VAD_MODEL.part" \
+    "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin"
+  mv "$VAD_MODEL.part" "$VAD_MODEL"
+fi
+
 echo ""
 echo "Done. Runtime tools installed:"
 [ -x "$NODE_BIN" ] && echo "  node: $("$NODE_BIN" --version)"
