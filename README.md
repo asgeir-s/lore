@@ -191,6 +191,35 @@ Meeting notes are regular notes in `notes/`. Audio files are stored in `.recordi
 
 You can also drag audio files, including `.m4a` recordings from Apple Voice Memos, directly into Lore. Drop audio on the Meetings target for the Summary/Transcript workflow, or on the Notes target for a plain transcription without timestamps. Before import starts, you can add a title and tags or skip that step to keep the automatic title/tags.
 
+### Language and Norwegian models
+
+Settings → Recording language supports **Auto-detect** (the default), **Norwegian**, and **English**. The choice applies to recordings, audio imports, and retranscription; pending jobs retain their original language and model. Auto-detect runs language detection independently for each section, so mixed-language recordings can change language between sections.
+
+For Norwegian, [NB-Whisper Large by the National Library of Norway](https://huggingface.co/NbAiLab/nb-whisper-large) is available as an optional local model. Download the pinned, checksum-verified weights, then refresh the model list in Settings:
+
+```bash
+bash scripts/download-nb-whisper.sh          # full precision, about 3.1 GB
+bash scripts/download-nb-whisper.sh q5_0     # optional quantized version, about 1.1 GB
+```
+
+Select **Norwegian** and **Automatic** to prefer installed NB-Whisper weights. **Auto-detect** and **English** with Automatic prefer standard multilingual Whisper. An explicit model choice always takes priority. English-only `.en.bin` models require English. A missing selected model produces an error instead of silently changing models. NB-Whisper is released under Apache-2.0; subtitles generated with it should be attributed to NB-Whisper.
+
+### Recovery and incomplete transcripts
+
+Lore transcribes independent sections of at most one minute, preferring quiet boundaries and retaining two seconds of surrounding audio. Each section resets text context. Timestamped overlap merging keeps recording-relative times and preserves normal repeated speech.
+
+Recognition loops, malformed timestamps, process failures, and detected speech without text trigger retries in sections of at most 30 seconds. WebRTC voice activity detection checks for substantial missing speech at the beginning, middle, and end; it never removes quiet audio from recognition. These checks detect likely omissions, not every wrong or missing word. Unresolved ranges stop completion and summarization, and existing notes/transcripts remain intact.
+
+Audio-adjacent `.transcription/<audio-id>/<configuration>/` directories contain atomic section checkpoints, `partial.md` with incomplete ranges, raw Whisper JSON, stdout/stderr, and per-attempt timing/status metadata. Completed runs also contain `transcript.md`. Successful sections are reused after an interruption or retry; changed audio content, model content, language, engine version, or pipeline version starts a separate cache. Temporary audio slices are removed. Diagnostics stay local alongside the audio and are not automatically expired; they are git-ignored when the audio is in `.recordings/audio/`.
+
+A command-line harness uses the same pipeline without editing a note:
+
+```bash
+cargo run --manifest-path src-tauri/Cargo.toml --bin lore-transcribe -- \
+  /path/to/recording.wav /path/to/model.bin auto
+# The final argument may also be no or en; input must be 16 kHz mono 16-bit PCM WAV.
+```
+
 **Required:** `ffmpeg`, `whisper-cpp` (install via setup script)
 **Optional:** `ollama` with a model (for AI summaries — without it you still get the transcript)
 

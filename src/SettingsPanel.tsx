@@ -10,6 +10,13 @@ import type {
   InstallToolKey,
 } from "./api";
 
+const NB_WHISPER_DOWNLOAD = [
+  'mkdir -p "$HOME/.local/share/whisper-cpp/models"',
+  'curl -fL --retry 3 -o "$HOME/.local/share/whisper-cpp/models/ggml-nb-whisper-large.bin.download" https://huggingface.co/NbAiLab/nb-whisper-large/resolve/8c6249fdeeb4dcd05e5735a4c39640607eb6e4ac/ggml-model.bin',
+  "printf '%s  %s\\n' '0f2f66f22e11a7c7da3c582d8e5c89cb2c0011753ba9c7c9731e320a4ba33e76' \"$HOME/.local/share/whisper-cpp/models/ggml-nb-whisper-large.bin.download\" | { if command -v sha256sum >/dev/null 2>&1; then sha256sum -c -; else shasum -a 256 -c -; fi; }",
+  'mv "$HOME/.local/share/whisper-cpp/models/ggml-nb-whisper-large.bin.download" "$HOME/.local/share/whisper-cpp/models/ggml-nb-whisper-large.bin"',
+].join(" && ");
+
 interface SettingsPanelProps {
   toolStatus: ToolStatus;
   notesDirPath: string | null;
@@ -428,13 +435,18 @@ export function SettingsPanel({
             value={modelSettings.whisper_model ?? ""}
             onChange={handleWhisperModelChange}
           >
-            <option value="">Auto-detect</option>
+            <option value="">Automatic</option>
             {whisperModels.map((m) => (
               <option key={m.path} value={m.name}>
-                {m.name} ({formatSize(m.size_bytes)})
+                {m.label} ({formatSize(m.size_bytes)})
               </option>
             ))}
           </select>
+          <p className="settings-tool-desc">
+            Automatic prefers NB-Whisper for Norwegian when installed. Auto-detect
+            and English prefer the multilingual model. An explicit model choice
+            always takes priority.
+          </p>
           {toolStatus.whisper && whisperModels.length === 0 && (
             <p className="settings-tool-desc">
               No Whisper models found in{" "}
@@ -452,6 +464,16 @@ export function SettingsPanel({
               Sample download command:
             </span>
             <CopyableCommand command="curl -L -o ~/.local/share/whisper-cpp/models/ggml-large-v3.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin" />
+            <span className="settings-install-label">
+              Norwegian: NB-Whisper Large (about 3.1 GB)
+            </span>
+            <CopyableCommand command={NB_WHISPER_DOWNLOAD} />
+            <p className="settings-tool-desc">
+              <a href="https://huggingface.co/NbAiLab/nb-whisper-large"
+                target="_blank" rel="noopener noreferrer">
+                NB-Whisper by the National Library of Norway
+              </a>. Download, then refresh the model list above.
+            </p>
             <span className="settings-install-label">
               Browse other models:{" "}
               <a

@@ -779,52 +779,11 @@ async fn list_ollama_models() -> Result<Vec<ollama::OllamaModelInfo>, String> {
     Ok(ollama::list_model_options().await)
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct WhisperModelInfo {
-    pub name: String,
-    pub path: String,
-    pub size_bytes: u64,
-}
-
 #[tauri::command]
-async fn list_whisper_models() -> Result<Vec<WhisperModelInfo>, String> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/default".to_string());
-    let search_dirs = [
-        format!("{home}/.local/share/whisper-cpp/models"),
-        format!("{home}/whisper.cpp/models"),
-        "/opt/homebrew/share/whisper-cpp/models".to_string(),
-        format!("{home}/Library/Application Support/com.pais.handy/models"),
-    ];
-
-    let mut models = Vec::new();
-    for dir in &search_dirs {
-        let dir_path = std::path::Path::new(dir);
-        if !dir_path.is_dir() {
-            continue;
-        }
-        if let Ok(entries) = std::fs::read_dir(dir_path) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().map(|e| e == "bin").unwrap_or(false) {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                    let path_str = path.to_string_lossy().to_string();
-                    models.push(WhisperModelInfo {
-                        name,
-                        path: path_str,
-                        size_bytes: size,
-                    });
-                }
-            }
-        }
-    }
-
-    // Sort by size descending (larger = better quality).
-    models.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
-    Ok(models)
+async fn list_whisper_models() -> Result<Vec<transcription::models::WhisperModelInfo>, String> {
+    Ok(transcription::models::list(
+        &transcription::models::search_dirs(),
+    ))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

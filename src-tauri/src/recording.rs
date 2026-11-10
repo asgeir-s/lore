@@ -1600,75 +1600,6 @@ async fn convert_mono(input: &Path, output: &Path) -> Result<(), String> {
 
 // ── Transcription ───────────────────────────────────────────────────
 
-fn whisper_search_dirs() -> Vec<String> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/default".to_string());
-    vec![
-        format!("{home}/.local/share/whisper-cpp/models"),
-        format!("{home}/whisper.cpp/models"),
-        "/opt/homebrew/share/whisper-cpp/models".to_string(),
-        format!("{home}/Library/Application Support/com.pais.handy/models"),
-    ]
-}
-
-async fn find_whisper_model(override_name: Option<&str>) -> Option<PathBuf> {
-    let search_dirs = whisper_search_dirs();
-
-    // If user selected a specific model, find it by filename.
-    if let Some(name) = override_name {
-        for dir in &search_dirs {
-            let candidate = Path::new(dir).join(name);
-            if candidate.exists() {
-                return Some(candidate);
-            }
-        }
-        // Try as absolute path.
-        let p = PathBuf::from(name);
-        if p.exists() {
-            return Some(p);
-        }
-        eprintln!("recording: configured whisper model '{name}' not found, falling back to auto");
-    }
-
-    let preferred = [
-        "ggml-large-v3.bin",
-        "ggml-large-v3-turbo.bin",
-        "ggml-medium.bin",
-        "whisper-medium-q4_1.bin",
-        "ggml-small.bin",
-        "ggml-base.bin",
-        "ggml-tiny.bin",
-    ];
-
-    for dir in &search_dirs {
-        let dir_path = Path::new(dir);
-        if !dir_path.is_dir() {
-            continue;
-        }
-        // Try preferred models in order.
-        for model_name in &preferred {
-            let candidate = dir_path.join(model_name);
-            if candidate.exists() {
-                return Some(candidate);
-            }
-        }
-        // Fall back to any .bin file.
-        if let Ok(entries) = std::fs::read_dir(dir_path) {
-            for entry in entries.flatten() {
-                if entry
-                    .path()
-                    .extension()
-                    .map(|e| e == "bin")
-                    .unwrap_or(false)
-                {
-                    return Some(entry.path());
-                }
-            }
-        }
-    }
-
-    None
-}
-
 pub async fn transcribe(
     wav_path: &Path,
     whisper_model_override: Option<&str>,
@@ -1683,9 +1614,11 @@ async fn transcribe_with_progress(
     language: TranscriptionLanguage,
     progress: impl Fn(&str) + Send + Sync,
 ) -> Result<String, String> {
-    let model = find_whisper_model(whisper_model_override)
-        .await
-        .ok_or_else(|| "No whisper model found. Download a ggml model.".to_string())?;
+    let model = crate::transcription::models::select(
+        &crate::transcription::models::search_dirs(),
+        whisper_model_override,
+        language,
+    )?;
     crate::transcription::transcribe(wav_path, &model, language, progress).await
 }
 

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 mod cache;
+pub mod models;
 #[cfg(all(test, unix))]
 mod process_tests;
 use cache::Session;

@@ -505,6 +505,7 @@ export interface OllamaModelInfo {
 
 export interface WhisperModelInfo {
   name: string;
+  label: string;
   path: string;
   size_bytes: number;
 }
