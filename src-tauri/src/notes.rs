@@ -1195,6 +1195,19 @@ pub fn delete_note(notes_dir: &str, id: &str, index: &mut NoteIndex) -> io::Resu
         }
     }
 
+    // A failed job must not recreate a note the user explicitly deleted.
+    if transcription_error(notes_dir, id).is_some() {
+        for pending in [
+            recording_jobs_dir(notes_dir).join(format!("{id}.job.json")),
+            recording_jobs_dir(notes_dir).join(format!("{id}.transcription-error.json")),
+        ] {
+            match fs::remove_file(pending) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
     index.notes.remove(id);
     save_index(notes_dir, index)?;
 
@@ -1984,6 +1997,21 @@ mod tests {
         let dir = format!("/tmp/lore_test_{}", Uuid::new_v4());
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn deleting_a_failed_note_removes_its_pending_retry() {
+        let dir = setup_test_dir();
+        let mut index = NoteIndex::default();
+        let meta = save_note(&dir, None, "Failed meeting", &[], None, &mut index).unwrap();
+        set_transcription_error(&dir, &meta.id, Some("incomplete")).unwrap();
+        let pending = recording_jobs_dir(&dir).join(format!("{}.job.json", meta.id));
+        fs::write(&pending, r#"{"last_error":"incomplete"}"#).unwrap();
+        delete_note(&dir, &meta.id, &mut index).unwrap();
+        assert!(!pending.exists());
+        assert!(transcription_error(&dir, &meta.id).is_none());
+        assert!(!index.notes.contains_key(&meta.id));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
