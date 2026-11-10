@@ -1,0 +1,168 @@
+{
+  "date": "2026-11-10",
+  "engine": "whisper.cpp 1.9.5",
+  "default_model": "ggml-large-v3.bin",
+  "default_language": "auto",
+  "supported_languages": [
+    "auto",
+    "no",
+    "en"
+  ],
+  "norwegian_comparison": {
+    "description": "Three excerpts from distinct Norwegian meeting recordings; 300 seconds of source audio per model.",
+    "human_reference_available": false,
+    "summary": {
+      "ggml-large-v3.bin": {
+        "complete_excerpts": 3,
+        "total_excerpts": 3,
+        "retries": 0,
+        "total_elapsed_seconds": 92.23
+      },
+      "ggml-nb-whisper-large.bin": {
+        "complete_excerpts": 2,
+        "total_excerpts": 3,
+        "retries": 3,
+        "total_elapsed_seconds": 128.43
+      }
+    },
+    "runs": [
+      {
+        "clip": "affected-meeting",
+        "model": "ggml-large-v3.bin",
+        "language": "no",
+        "start_seconds": 360.0,
+        "duration_seconds": 120.0,
+        "elapsed_seconds": 32.35,
+        "complete": true,
+        "words": 259,
+        "retries": 0,
+        "word_error_rate": null
+      },
+      {
+        "clip": "affected-meeting",
+        "model": "ggml-nb-whisper-large.bin",
+        "language": "no",
+        "start_seconds": 360.0,
+        "duration_seconds": 120.0,
+        "elapsed_seconds": 57.45,
+        "complete": false,
+        "words": 0,
+        "retries": 2,
+        "word_error_rate": null
+      },
+      {
+        "clip": "norwegian-meeting-b",
+        "model": "ggml-large-v3.bin",
+        "language": "no",
+        "start_seconds": 120.0,
+        "duration_seconds": 90.0,
+        "elapsed_seconds": 26.16,
+        "complete": true,
+        "words": 195,
+        "retries": 0,
+        "word_error_rate": null
+      },
+      {
+        "clip": "norwegian-meeting-b",
+        "model": "ggml-nb-whisper-large.bin",
+        "language": "no",
+        "start_seconds": 120.0,
+        "duration_seconds": 90.0,
+        "elapsed_seconds": 46.58,
+        "complete": true,
+        "words": 168,
+        "retries": 1,
+        "word_error_rate": null
+      },
+      {
+        "clip": "norwegian-meeting-c",
+        "model": "ggml-large-v3.bin",
+        "language": "no",
+        "start_seconds": 120.0,
+        "duration_seconds": 90.0,
+        "elapsed_seconds": 33.72,
+        "complete": true,
+        "words": 289,
+        "retries": 0,
+        "word_error_rate": null
+      },
+      {
+        "clip": "norwegian-meeting-c",
+        "model": "ggml-nb-whisper-large.bin",
+        "language": "no",
+        "start_seconds": 120.0,
+        "duration_seconds": 90.0,
+        "elapsed_seconds": 24.4,
+        "complete": true,
+        "words": 202,
+        "retries": 0,
+        "word_error_rate": null
+      }
+    ],
+    "interpretation": "Large-v3 passed timed speech-coverage checks on all three excerpts. NB-Whisper had timestamp/coverage failures on the affected excerpt, so it remains opt-in. No Norwegian word-error-rate or general accuracy claim is made."
+  },
+  "english_smoke_test": {
+    "description": "32-word known reference synthesized locally using macOS say, tested in English and Auto-detect modes.",
+    "runs": [
+      {
+        "clip": "english-reference",
+        "model": "ggml-large-v3.bin",
+        "language": "en",
+        "start_seconds": 0.0,
+        "duration_seconds": 10.74925,
+        "elapsed_seconds": 12.46,
+        "complete": true,
+        "words": 32,
+        "retries": 0,
+        "problems": [],
+        "word_error_rate": 0.0
+      },
+      {
+        "clip": "english-reference",
+        "model": "ggml-large-v3.bin",
+        "language": "auto",
+        "start_seconds": 0.0,
+        "duration_seconds": 10.74925,
+        "elapsed_seconds": 14.17,
+        "complete": true,
+        "words": 32,
+        "retries": 0,
+        "problems": [],
+        "word_error_rate": 0.0
+      }
+    ],
+    "interpretation": "Both modes completed with normalized word error rate 0 on this short fixture; this is not a general English accuracy benchmark."
+  },
+  "full_recording_regression": {
+    "duration_ms": 2338112,
+    "original_transcript_last_timestamp": "06:54",
+    "new_transcript_last_timestamp": "38:50",
+    "new_last_recognized_phrase_end_ms": 2331200,
+    "complete": false,
+    "unresolved_ranges": [
+      {
+        "section": {
+          "start_ms": 2331960,
+          "end_ms": 2338040
+        },
+        "reason": "Detected speech has no corresponding transcript"
+      }
+    ],
+    "coverage_gap_recovered": "A gap around 14:34–14:38 triggered smaller-section retries and was resolved.",
+    "resume_validation": "Completed sections were reused; only the unresolved final part was retranscribed.",
+    "interpretation": "Useful timed text is recovered through approximately 38:51. The final seconds are explicitly flagged for review rather than reported as complete."
+  },
+  "automated_checks": {
+    "rust_tests": 78,
+    "rust_tests_passed": 78,
+    "frontend_build": "passed",
+    "cargo_fmt": "passed",
+    "cargo_clippy": "passed with 20 pre-existing warnings outside the new transcription code"
+  },
+  "limitations": [
+    "Coverage and repetition checks cannot establish that every word is correct.",
+    "Norwegian timings are single local runs including model fingerprinting and startup; they are indicative, not controlled performance benchmarks.",
+    "Private audio and transcript text are excluded from this checked-in report.",
+    "Live browser preview was unavailable; UI validation used the production build and backend serialization/failure-state tests."
+  ]
+}

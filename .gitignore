@@ -16,3 +16,6 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Python benchmark tooling
+__pycache__/
