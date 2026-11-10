@@ -20,6 +20,7 @@ export interface NoteContent {
   modified: string;
   /** True when a recording audio file still exists for this note. */
   has_audio?: boolean;
+  transcription_error?: string | null;
 }
 
 export function isPinnedNotePath(path: string): boolean {

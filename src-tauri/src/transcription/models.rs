@@ -28,7 +28,7 @@ pub fn list(dirs: &[PathBuf]) -> Vec<WhisperModelInfo> {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if !path.is_file() || !path.extension().is_some_and(|e| e == "bin") {
+                if !path.is_file() || path.extension().is_none_or(|e| e != "bin") {
                     continue;
                 }
                 let name = entry.file_name().to_string_lossy().to_string();

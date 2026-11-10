@@ -139,6 +139,19 @@ impl RecordingJob {
         let _ = std::fs::remove_file(path);
     }
 
+    /// A manual transcript repair replaces the pending transcription stage;
+    /// leaving it queued would append the same meeting again next launch.
+    pub fn finish_manual_retry(notes_dir: &str, note_id: &str) {
+        for job in Self::scan(notes_dir) {
+            if job.note_id == note_id
+                && job.stage == JobStage::Transcribing
+                && job.last_error.is_some()
+            {
+                job.delete();
+            }
+        }
+    }
+
     pub fn scan(notes_dir: &str) -> Vec<RecordingJob> {
         let mut jobs = Vec::new();
         let dirs = [
@@ -1376,6 +1389,9 @@ async fn process_recording(
         let _ = job.save();
     }
 
+    if let Err(error) = crate::notes::set_transcription_error(&job.notes_dir, &job.note_id, None) {
+        eprintln!("recording: clear transcription failure status: {error}");
+    }
     let summary = job.summary.clone().unwrap_or_default();
 
     if plain_note_output {
@@ -1978,6 +1994,32 @@ async fn create_error_note(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_retry_clears_only_failed_transcription_jobs_and_loads_legacy_jobs() {
+        let root = std::env::temp_dir().join(format!("lore-job-test-{}", uuid::Uuid::new_v4()));
+        let dir = root.to_string_lossy().to_string();
+        let mut job: RecordingJob = serde_json::from_value(serde_json::json!({
+            "note_id": "failed", "stage": "Transcribing", "notes_dir": dir,
+            "mic_path": "", "system_path": "", "final_wav_path": "", "has_system": false,
+            "transcript": null, "summary": null, "created_at": "test"
+        }))
+        .unwrap();
+        assert_eq!(job.transcription_language, TranscriptionLanguage::Auto);
+        assert!(job.whisper_model.is_none());
+        job.last_error = Some("incomplete".into());
+        job.save().unwrap();
+        let mut other = job.clone();
+        other.note_id = "summarizing".into();
+        other.stage = JobStage::Summarizing;
+        other.save().unwrap();
+        RecordingJob::finish_manual_retry(&dir, "failed");
+        assert!(!RecordingJob::job_path(&dir, "failed").exists());
+        assert!(RecordingJob::job_path(&dir, "summarizing").exists());
+        RecordingJob::finish_manual_retry(&dir, "summarizing");
+        assert!(RecordingJob::job_path(&dir, "summarizing").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn transcript_without_timestamps_removes_segment_prefixes() {

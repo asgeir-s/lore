@@ -437,6 +437,12 @@ fn retry_parts(section: &Section) -> Vec<Section> {
 fn validate_section(segments: &[Segment]) -> Result<(), String> {
     // Check raw segments, before overlap removal could hide a decoder loop.
     let keys = segments.iter().map(|s| words(&s.text)).collect::<Vec<_>>();
+    if keys
+        .windows(10)
+        .any(|window| !window[0].is_empty() && window.iter().all(|key| key == &window[0]))
+    {
+        return Err("A short phrase repeats excessively".into());
+    }
     for period in 1..=4 {
         let count = if period == 1 { 4 } else { 3 };
         let size = period * count;
@@ -761,6 +767,15 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(validate_section(&alternating).is_err());
         assert!(validate_section(&segments[..2]).is_ok());
+        let short = (0..10)
+            .map(|i| Segment {
+                start_ms: i * 1000,
+                end_ms: i * 1000 + 1000,
+                text: "yes".into(),
+            })
+            .collect::<Vec<_>>();
+        assert!(validate_section(&short).is_err());
+        assert!(validate_section(&short[..3]).is_ok());
         let inline = vec![Segment {
             start_ms: 0,
             end_ms: 30_000,

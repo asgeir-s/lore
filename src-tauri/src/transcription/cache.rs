@@ -34,6 +34,7 @@ pub(super) struct Session {
     pub dir: PathBuf,
     pub attempts: PathBuf,
     checkpoint: Checkpoint,
+    _lock: std::fs::File,
 }
 
 impl Session {
@@ -44,6 +45,27 @@ impl Session {
         engine: &Path,
         sections: &[Section],
     ) -> Result<Self, String> {
+        use fs2::FileExt;
+        let root = wav
+            .parent()
+            .ok_or("Audio has no parent directory")?
+            .join(".transcription")
+            .join(wav.file_stem().ok_or("Audio has no file stem")?);
+        std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.join("active.lock"))
+            .map_err(|e| e.to_string())?;
+        lock.try_lock_exclusive().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::WouldBlock {
+                "Transcription is already running for this recording".into()
+            } else {
+                format!("Lock transcription: {e}")
+            }
+        })?;
         let audio_path = wav.to_owned();
         let model_path = model.to_owned();
         let (audio_sha256, model_sha256) = tokio::task::spawn_blocking(move || {
@@ -79,12 +101,7 @@ impl Session {
         };
         let identity_json = serde_json::to_vec(&identity).map_err(|e| e.to_string())?;
         let key = format!("{:x}", Sha256::digest(&identity_json));
-        let dir = wav
-            .parent()
-            .ok_or("Audio has no parent directory")?
-            .join(".transcription")
-            .join(wav.file_stem().ok_or("Audio has no file stem")?)
-            .join(&key[..20]);
+        let dir = root.join(&key[..20]);
         std::fs::create_dir_all(&dir).map_err(|e| format!("Create transcription cache: {e}"))?;
         #[cfg(unix)]
         {
@@ -108,6 +125,7 @@ impl Session {
             dir,
             attempts,
             checkpoint,
+            _lock: lock,
         };
         session.save()?;
         Ok(session)
@@ -250,6 +268,7 @@ mod tests {
         let mut session = Session {
             attempts: dir.clone(),
             dir: dir.clone(),
+            _lock: std::fs::File::create(dir.join("active.lock")).unwrap(),
             checkpoint: Checkpoint {
                 identity,
                 completed: vec![],

@@ -33,6 +33,7 @@ futures-util = "0.3"
 tauri-plugin-clipboard-manager = "2"
 webrtc-vad = "0.4"
 sha2 = "0.10"
+fs2 = "0.4"
 
 # Keep content fingerprinting fast when validating multi-gigabyte models in dev.
 [profile.dev.package.sha2]

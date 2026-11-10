@@ -2253,3 +2253,14 @@ body {
   border-radius: 2px;
   transition: width 0.3s ease-out;
 }
+
+.transcript-error {
+  margin: 0 0 16px;
+  padding: 12px 48px 12px 12px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

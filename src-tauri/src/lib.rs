@@ -667,15 +667,23 @@ async fn retranscribe_note(state: State<'_, AppState>, id: String) -> Result<Not
         return Err(format!("Audio file not found: {}", audio_path.display()));
     }
 
-    let transcript = recording::transcribe(&audio_path, whisper_model.as_deref(), language)
-        .await
-        .map_err(|e| e.to_string())?;
+    let transcript =
+        match recording::transcribe(&audio_path, whisper_model.as_deref(), language).await {
+            Ok(transcript) => transcript,
+            Err(error) => {
+                notes::set_transcription_error(&notes_dir, &id, Some(&error))
+                    .map_err(|e| format!("{error}; save failure status: {e}"))?;
+                return Err(error);
+            }
+        };
 
     let meta = {
         let mut index = state.index.lock().map_err(|e| e.to_string())?;
         notes::replace_meeting_transcript(&notes_dir, &id, &transcript, &mut index)
             .map_err(|e| e.to_string())?
     };
+    recording::RecordingJob::finish_manual_retry(&notes_dir, &id);
+    notes::set_transcription_error(&notes_dir, &id, None).map_err(|e| e.to_string())?;
 
     let git = state.git.lock().map_err(|e| e.to_string())?;
     git.notify_change(&meta.path, &meta.title, false);
@@ -686,6 +694,12 @@ async fn retranscribe_note(state: State<'_, AppState>, id: String) -> Result<Not
 async fn resummarize_note(state: State<'_, AppState>, id: String) -> Result<NoteMetadata, String> {
     let (notes_dir, transcript, summary_model) = {
         let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
+        if notes::transcription_error(&dir, &id).is_some() {
+            return Err(
+                "Transcription is incomplete. Retry transcription before regenerating the summary."
+                    .into(),
+            );
+        }
         let ms = state.model_settings.lock().map_err(|e| e.to_string())?;
         let index = state.index.lock().map_err(|e| e.to_string())?;
         let transcript =

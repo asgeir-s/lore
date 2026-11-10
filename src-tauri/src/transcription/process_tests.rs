@@ -149,3 +149,21 @@ async fn nonzero_exit_never_accepts_json_even_when_the_process_writes_it() {
     assert_eq!(f.calls(), 3);
     assert!(!f.cache().join("transcript.md").exists());
 }
+
+#[tokio::test]
+async fn concurrent_runs_for_one_recording_are_rejected_and_the_lock_is_released() {
+    let f = Fixture::new("fixed");
+    let (first, second) = tokio::join!(
+        f.run(TranscriptionLanguage::Auto),
+        f.run(TranscriptionLanguage::Auto)
+    );
+    assert_ne!(first.is_ok(), second.is_ok());
+    assert!(first
+        .err()
+        .or_else(|| second.err())
+        .unwrap()
+        .contains("already running"));
+    assert_eq!(f.calls(), 1);
+    f.run(TranscriptionLanguage::Auto).await.unwrap();
+    assert_eq!(f.calls(), 1);
+}

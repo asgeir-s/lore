@@ -323,6 +323,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     >([]);
     const [regeneratingTags, setRegeneratingTags] = useState(false);
     const [retranscribingNote, setRetranscribingNote] = useState(false);
+    const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
     const [resummarizingNote, setResummarizingNote] = useState(false);
     const [relatedLoading, setRelatedLoading] = useState(false);
     const [selectedTabId, setSelectedTabId] = useState("notes");
@@ -441,6 +442,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           const note = await getNote(noteId);
           setContent(note.content);
           setMeetingTranscript(note.transcript ?? null);
+          setTranscriptionError(note.transcription_error ?? null);
           setMeetingHasAudio(note.has_audio ?? false);
           contentRef.current = note.content;
           setTitle(note.title);
@@ -474,6 +476,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       clearLocalDraft();
       setContent("");
       setMeetingTranscript(null);
+      setTranscriptionError(null);
       setMeetingHasAudio(false);
       contentRef.current = "";
       setTitle("");
@@ -789,6 +792,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             const note = await getNote(noteIdNow);
             setContent(note.content);
             setMeetingTranscript(note.transcript ?? null);
+            setTranscriptionError(note.transcription_error ?? null);
             setMeetingHasAudio(note.has_audio ?? false);
             contentRef.current = note.content;
             setTitle(meta.title);
@@ -884,6 +888,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
               savedTitleRef.current = note.title;
               savedTagsRef.current = note.tags;
               setMeetingTranscript(note.transcript ?? null);
+              setTranscriptionError(note.transcription_error ?? null);
               setMeetingHasAudio(note.has_audio ?? false);
               setPinned(isPinnedNotePath(note.path));
             } else {
@@ -893,6 +898,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
               savedTitleRef.current = "";
               savedTagsRef.current = [];
               setMeetingTranscript(null);
+              setTranscriptionError(null);
               setMeetingHasAudio(false);
               setPinned(false);
             }
@@ -1006,6 +1012,18 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       import("@tauri-apps/api/event")
         .then(({ listen }) => {
           if (cancelled) return;
+          listen<{ note_id: string; stage: string; detail: string }>("recording-progress", (event) => {
+            if (event.payload.note_id === loadedNoteIdRef.current && event.payload.stage === "failed") {
+              setTranscriptionError(event.payload.detail);
+            }
+          }).then((unlisten) => {
+            if (cancelled) unlisten(); else cleanups.push(unlisten);
+          });
+          listen<{ note_id: string }>("recording-complete", (event) => {
+            if (event.payload.note_id === loadedNoteIdRef.current) setTranscriptionError(null);
+          }).then((unlisten) => {
+            if (cancelled) unlisten(); else cleanups.push(unlisten);
+          });
           listen<string[]>("qmd-processing", (event) => {
             const currentId = loadedNoteIdRef.current;
             if (currentId && event.payload.includes(currentId)) {
@@ -1094,9 +1112,12 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       onBgJob?.(jobKey, "Retranscribing", loadedNoteId);
       try {
         await retranscribeNote(loadedNoteId);
+        if (loadedNoteIdRef.current !== loadedNoteId) return;
         const noteContent = await getNote(loadedNoteId);
+        if (loadedNoteIdRef.current !== loadedNoteId) return;
         setContent(noteContent.content);
         setMeetingTranscript(noteContent.transcript ?? null);
+        setTranscriptionError(noteContent.transcription_error ?? null);
         setMeetingHasAudio(noteContent.has_audio ?? false);
         contentRef.current = noteContent.content;
         savedContentRef.current = noteContent.content;
@@ -1104,6 +1125,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         await onSaved();
       } catch (e) {
         console.error("Failed to retranscribe:", e);
+        if (loadedNoteIdRef.current === loadedNoteId) setTranscriptionError(String(e));
       } finally {
         setRetranscribingNote(false);
         onBgJob?.(jobKey, null);
@@ -1120,6 +1142,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         const noteContent = await getNote(loadedNoteId);
         setContent(noteContent.content);
         setMeetingTranscript(noteContent.transcript ?? null);
+        setTranscriptionError(noteContent.transcription_error ?? null);
         setMeetingHasAudio(noteContent.has_audio ?? false);
         contentRef.current = noteContent.content;
         savedContentRef.current = noteContent.content;
@@ -1412,7 +1435,13 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
                       showTranscriptEmptyState ? " transcript-empty" : ""
                     }`}
                   >
-                    {canResummarize && (
+                    {transcriptionError && (
+                      <p className="transcript-error" role="alert">
+                        <strong>Transcription incomplete.</strong> {transcriptionError}
+                        {meetingHasAudio && " Use ↻ in the Transcript tab to retry."}
+                      </p>
+                    )}
+                    {canResummarize && !transcriptionError && (
                       <button
                         className="meeting-regen-btn"
                         onClick={() => void handleResummarizeNote()}
@@ -1429,7 +1458,8 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
                       <button
                         className="meeting-regen-btn"
                         onClick={() => void handleRetranscribeNote()}
-                        title="Retranscribe from audio file"
+                        title="Retry from saved audio; successful sections are reused"
+                        disabled={retranscribingNote}
                       >
                         {retranscribingNote ? (
                           <span className="related-loading">...</span>

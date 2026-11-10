@@ -30,6 +30,8 @@ pub struct NoteContent {
     /// True when a recording audio file still exists on disk for this note,
     /// meaning transcription can be (re-)run from it.
     pub has_audio: bool,
+    #[serde(default)]
+    pub transcription_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1199,6 +1201,39 @@ pub fn delete_note(notes_dir: &str, id: &str, index: &mut NoteIndex) -> io::Resu
     Ok(())
 }
 
+/// Failure state is separate from the user's note and transcript contents.
+pub fn transcription_error(notes_dir: &str, id: &str) -> Option<String> {
+    let jobs = recording_jobs_dir(notes_dir);
+    fs::read(jobs.join(format!("{id}.transcription-error.json")))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<String>(&bytes).ok())
+        .or_else(|| {
+            fs::read(jobs.join(format!("{id}.job.json")))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .and_then(|job| job["last_error"].as_str().map(str::to_owned))
+        })
+}
+
+pub fn set_transcription_error(notes_dir: &str, id: &str, error: Option<&str>) -> io::Result<()> {
+    let path = recording_jobs_dir(notes_dir).join(format!("{id}.transcription-error.json"));
+    if let Some(error) = error {
+        fs::create_dir_all(path.parent().unwrap())?;
+        let temporary = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
+        fs::write(
+            &temporary,
+            serde_json::to_vec(error).map_err(io::Error::other)?,
+        )?;
+        fs::rename(temporary, path)
+    } else {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+}
+
 /// Get a note by ID
 pub fn get_note(notes_dir: &str, id: &str, index: &NoteIndex) -> io::Result<NoteContent> {
     let meta = index
@@ -1223,6 +1258,7 @@ pub fn get_note(notes_dir: &str, id: &str, index: &NoteIndex) -> io::Result<Note
         created: meta.created.clone(),
         modified: meta.modified.clone(),
         has_audio,
+        transcription_error: transcription_error(notes_dir, id),
     })
 }
 
@@ -1948,6 +1984,43 @@ mod tests {
         let dir = format!("/tmp/lore_test_{}", Uuid::new_v4());
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn transcription_failure_is_persistent_without_changing_note_or_transcript() {
+        let dir = setup_test_dir();
+        let mut index = NoteIndex::default();
+        let meta = save_note(
+            &dir,
+            None,
+            "# Keep my meeting\n\nOriginal notes",
+            &[],
+            None,
+            &mut index,
+        )
+        .unwrap();
+        write_meeting_transcript_file(&dir, &meta.id, "[00:00] Original transcript").unwrap();
+        let path = note_abspath(&dir, &meta.path);
+        let original = fs::read(&path).unwrap();
+        let transcript =
+            fs::read(meeting_transcripts_dir(&dir).join(format!("{}.md", meta.id))).unwrap();
+        set_transcription_error(&dir, &meta.id, Some("Missing speech at 06:54–07:30")).unwrap();
+        let note = get_note(&dir, &meta.id, &index).unwrap();
+        assert_eq!(
+            note.transcription_error.as_deref(),
+            Some("Missing speech at 06:54–07:30")
+        );
+        assert_eq!(fs::read(path).unwrap(), original);
+        assert_eq!(
+            fs::read(meeting_transcripts_dir(&dir).join(format!("{}.md", meta.id))).unwrap(),
+            transcript
+        );
+        set_transcription_error(&dir, &meta.id, None).unwrap();
+        assert!(get_note(&dir, &meta.id, &index)
+            .unwrap()
+            .transcription_error
+            .is_none());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
