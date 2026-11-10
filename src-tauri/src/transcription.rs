@@ -626,6 +626,7 @@ fn merge_section(merged: &mut Vec<Segment>, segments: Vec<Segment>, section: &Se
         if segment.end_ms <= section.start_ms || segment.start_ms >= section.end_ms {
             continue;
         }
+        let mut replaces_boundary = false;
         // The same boundary utterance may be split into several segments in
         // one pass and paraphrased slightly in the other. Prefer one coherent
         // decode when their start times and opening words agree.
@@ -642,6 +643,7 @@ fn merge_section(merged: &mut Vec<Segment>, segments: Vec<Segment>, section: &Se
                 if first.start_ms.abs_diff(segment.start_ms) <= 750 && common >= 3 {
                     if segment.end_ms >= boundary_end {
                         merged.truncate(at);
+                        replaces_boundary = true;
                     } else if segment.end_ms <= first.end_ms {
                         continue;
                     }
@@ -650,7 +652,7 @@ fn merge_section(merged: &mut Vec<Segment>, segments: Vec<Segment>, section: &Se
         }
         // Only deduplicate across section boundaries, never within a section:
         // "yes, yes" may be exactly what was said.
-        if segment.start_ms < boundary_end && !context.is_empty() {
+        if !replaces_boundary && segment.start_ms < boundary_end && !context.is_empty() {
             let after = words(&segment.text);
             if !after.is_empty()
                 && segment.end_ms <= boundary_end
@@ -694,6 +696,40 @@ fn render(segments: &[Segment]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacing_a_prefix_segment_keeps_its_opening_words_and_coverage() {
+        let mut merged = vec![Segment {
+            start_ms: 297_100,
+            end_ms: 301_100,
+            text: "Og da ser dere her.".into(),
+        }];
+        let text = "Og da ser dere her, så har han kravene til stillingen.";
+        merge_section(
+            &mut merged,
+            vec![Segment {
+                start_ms: 297_100,
+                end_ms: 315_320,
+                text: text.into(),
+            }],
+            &Section {
+                start_ms: 299_100,
+                end_ms: 358_800,
+            },
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].text, text);
+        assert_eq!(merged[0].start_ms, 297_100);
+        assert!(uncovered_speech(
+            &vec![true; 16_000],
+            &merged,
+            &Section {
+                start_ms: 297_100,
+                end_ms: 315_320
+            }
+        )
+        .is_empty());
+    }
 
     #[test]
     fn overlap_prefers_one_complete_utterance_over_conflicting_fragments() {
