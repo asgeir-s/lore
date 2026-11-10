@@ -49,7 +49,7 @@ fail = mode == 'fail' or (mode == 'partial' and (duration > 35000 or start == 30
 if fail:
     segments = [{'text':'This is a stuck decoder.', 'offsets':{'from':i*1000,'to':i*1000+1000}} for i in range(4)]
 else:
-    segments = [{'text':'Accepted speech for section ' + str(start), 'offsets':{'from':0,'to':duration}}]
+    segments = [{'text':'Accepted speech for section ' + str(start), 'offsets':{'from':0,'to':duration - 5000 if mode == 'missing' else duration}}]
 base.with_suffix('.json').write_text(json.dumps({'transcription':segments}))
 print('Retained recognizer output')
 "#).unwrap();
@@ -166,4 +166,45 @@ async fn concurrent_runs_for_one_recording_are_rejected_and_the_lock_is_released
     assert_eq!(f.calls(), 1);
     f.run(TranscriptionLanguage::Auto).await.unwrap();
     assert_eq!(f.calls(), 1);
+}
+
+#[tokio::test]
+async fn missing_coverage_keeps_valid_text_in_partial_output_without_caching_it_as_complete() {
+    let f = Fixture::new("missing");
+    let mut audio = Audio::read(&f.audio).unwrap();
+    // Controlled speech decisions isolate the recovery behavior from VAD.
+    audio.voice.fill(true);
+    let section = Section {
+        start_ms: 0,
+        end_ms: 60_000,
+    };
+    let mut session = Session::open(
+        &f.audio,
+        &f.model,
+        TranscriptionLanguage::En,
+        &f.engine,
+        &[section.clone()],
+    )
+    .await
+    .unwrap();
+    let (segments, problems) = recover_section(
+        &audio,
+        &section,
+        &f.model,
+        TranscriptionLanguage::En,
+        &f.engine,
+        &mut session,
+        &|_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(f.calls(), 3);
+    assert_eq!(segments.len(), 2);
+    assert!(!problems.is_empty());
+    assert!(session.get(&section).is_none());
+    session.finish(&segments, &problems).unwrap();
+    let partial = std::fs::read_to_string(session.dir.join("partial.md")).unwrap();
+    assert!(partial.contains("Accepted speech for section 30000"));
+    assert!(partial.contains("INCOMPLETE"));
+    assert!(!session.dir.join("transcript.md").exists());
 }

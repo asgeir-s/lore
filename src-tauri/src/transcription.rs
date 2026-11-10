@@ -206,6 +206,12 @@ async fn transcribe_using(
         end_ms: audio.duration_ms,
     };
     for section in uncovered_speech(&audio.voice, &merged, &whole) {
+        if problems
+            .iter()
+            .any(|p| p.section.start_ms <= section.start_ms && p.section.end_ms >= section.end_ms)
+        {
+            continue;
+        }
         problems.push(Problem {
             section,
             reason: "Detected speech has no corresponding transcript".into(),
@@ -286,13 +292,23 @@ async fn recover_section(
                 .await
                 .and_then(|segments| {
                     validate_section(&segments)?;
-                    validate_coverage(audio, &segments, &part)?;
                     Ok(segments)
                 })
         };
         match result {
             Ok(segments) => {
-                session.store(&part, &segments)?;
+                let gaps = uncovered_speech(&audio.voice, &segments, &part);
+                if gaps.is_empty() {
+                    session.store(&part, &segments)?;
+                } else {
+                    // Timed, non-looping text is still useful even if a later
+                    // phrase is missing. Keep it in the explicit partial output,
+                    // but do not mark the part complete or reuse it on retry.
+                    problems.extend(gaps.into_iter().map(|section| Problem {
+                        section,
+                        reason: "Detected speech has no corresponding transcript".into(),
+                    }));
+                }
                 merge_section(&mut merged, segments, &part);
             }
             Err(reason) => problems.push(Problem {
