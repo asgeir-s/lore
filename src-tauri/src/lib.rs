@@ -3,6 +3,7 @@ mod notes;
 mod ollama;
 mod qmd;
 mod recording;
+pub mod transcription;
 
 use git_sync::GitSyncHandle;
 use notes::{NoteIndex, NoteMetadata};
