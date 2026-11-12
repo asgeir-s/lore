@@ -1350,6 +1350,58 @@ body {
 }
 
 /* Git setup banner */
+.recording-permissions {
+  padding: 12px 20px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.recording-permissions-heading, .recording-permissions-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Match the 1000px note panel's 20px inner gutters. */
+.recording-permissions > * { max-width: 960px; margin-left: auto; margin-right: auto; }
+
+.recording-permissions-heading { justify-content: space-between; }
+.recording-permissions-heading > p, .recording-permission-label { font-weight: 600; }
+.recording-permissions-description { margin-top: 4px; }
+.recording-permissions-error { margin-top: 8px; }
+.recording-permission-row {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  min-height: 32px;
+}
+.recording-permissions button {
+  padding: 5px 10px;
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.recording-permissions button:hover:not(:disabled) { border-color: var(--text); }
+.recording-permissions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.recording-permissions button:disabled { cursor: wait; }
+@media (max-width: 540px) {
+  .recording-permissions-heading { align-items: flex-start; }
+  .recording-permissions-heading > p { max-width: 180px; }
+  .recording-permission-row { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; }
+  .recording-permission-row > span { grid-column: 1; }
+  .recording-permission-row button { grid-column: 2; grid-row: 1 / 3; }
+}
+
 .git-banner {
   display: flex;
   align-items: center;

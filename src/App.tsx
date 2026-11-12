@@ -44,6 +44,7 @@ import { ThemePicker } from "./ThemePicker";
 import { SearchPalette } from "./SearchPalette";
 import { SettingsPanel } from "./SettingsPanel";
 import { BackgroundJobsIndicator } from "./BackgroundJobs";
+import { RecordingPermissions } from "./RecordingPermissions";
 import type { BgJob } from "./BackgroundJobs";
 import { TagInput } from "./TagInput";
 import type { TagInputHandle } from "./TagInput";
@@ -2053,6 +2054,7 @@ export default function App() {
 
   return (
     <>
+      <RecordingPermissions />
       {notesDirBanner ? (
         <div className="git-banner">
           <span>Choose notes folder</span>

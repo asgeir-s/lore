@@ -4,7 +4,7 @@
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Lore needs microphone access to record meetings.</string>
-	<key>NSScreenCaptureUsageDescription</key>
-	<string>Lore needs screen recording access to capture system audio during meetings.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Lore needs system audio access to record the other participants in meetings.</string>
 </dict>
 </plist>

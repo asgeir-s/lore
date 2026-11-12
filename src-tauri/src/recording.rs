@@ -574,27 +574,6 @@ async fn run_worker(
 
 // ── Audio capture ───────────────────────────────────────────────────
 
-/// Check and request screen capture / system audio permission on macOS.
-/// Returns true if permission is granted.
-#[cfg(target_os = "macos")]
-fn check_screen_capture_permission() -> bool {
-    #[link(name = "CoreGraphics", kind = "framework")]
-    extern "C" {
-        fn CGPreflightScreenCaptureAccess() -> bool;
-        fn CGRequestScreenCaptureAccess() -> bool;
-    }
-    unsafe {
-        let preflight = CGPreflightScreenCaptureAccess();
-        eprintln!("recording: screen capture permission preflight = {preflight}");
-        if preflight {
-            return true;
-        }
-        let requested = CGRequestScreenCaptureAccess();
-        eprintln!("recording: screen capture permission requested = {requested}");
-        requested
-    }
-}
-
 /// Capture audio from mic (and optionally system via CoreAudio tap).
 /// Returns Ok(true) if system audio was captured, Ok(false) if mic-only.
 fn capture_audio(
@@ -608,19 +587,11 @@ fn capture_audio(
 ) -> Result<bool, String> {
     use cpal::traits::{DeviceTrait, HostTrait};
 
-    // Check/request screen capture permission (needed for system audio on macOS).
-    #[cfg(target_os = "macos")]
-    {
-        let has_permission = check_screen_capture_permission();
-        if !has_permission {
-            eprintln!("recording: WARNING — screen capture permission NOT granted. System audio will be silent.");
-            eprintln!("recording: Go to System Settings > Privacy & Security > Screen & System Audio Recording and add this app.");
-        }
-    }
-
     // Spawn system audio capture on a separate thread.
     // cpal 0.17+ on macOS: building an input stream on the default OUTPUT
-    // device captures system audio via a CoreAudio process tap.
+    // device captures system audio via a CoreAudio process tap. macOS requests
+    // system audio permission when the tap starts, using NSAudioCaptureUsageDescription.
+    // Screen capture permission is separate and is not needed for this API.
     let system_stop = stop.clone();
     let system_pause = pause.clone();
     let system_path_owned = system_path.to_path_buf();

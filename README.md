@@ -87,6 +87,16 @@ npm run install-app
 
 Your settings (theme, zoom, git remote) are preserved between installs/updates.
 
+Each macOS install automatically gets a new build number (`CFBundleVersion`), even when reinstalling the same release. The installer checks that release versions agree across npm, Rust, and Tauri before building. Build counters stay in the ignored `src-tauri/target/` directory and also take the currently installed build number into account. Release versions such as `0.1.1` are updated deliberately; see [AGENTS.md](AGENTS.md) for the release and installation rules.
+
+On macOS, builds sign the complete app bundle and the installer verifies the signature before replacing the installed app. Local builds use ad-hoc signing by default. For permissions to persist across rebuilt versions, install an Apple signing certificate and set `APPLE_SIGNING_IDENTITY` to its identity when building (see [Tauri's signing guide](https://v2.tauri.app/distribute/sign/macos/)). Changing the version number alone does not preserve privacy permissions; [macOS uses the signing identity](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
+
+Meeting recording needs access in System Settings → Privacy & Security → **Microphone**, and in **Screen & System Audio Recording → System Audio Recording Only**. Core Audio requests system audio access when recording starts; Lore does not request screen capture permission. After updating an ad-hoc build, you may need to re-enable access for `/Applications/Lore.app` and quit and reopen it.
+
+Lore checks recording permissions when it opens and when you return to its window. A notice shows microphone and system audio status, with **Allow access**, **Open Settings**, and **Check again** actions. The check does not open an audio stream or save audio. Known missing access stops recording before a job or timer starts. The notice can be dismissed once both permissions are allowed; if access is later revoked, it returns. This checks permissions, not microphone hardware, device routing, or audio levels.
+
+Microphone checks use AVFoundation. System audio has no public preflight API, so the macOS bridge resolves TCC's status/request functions at runtime, following the approach used by [AudioCap](https://github.com/insidegui/AudioCap/blob/main/AudioCap/ProcessTap/AudioRecordingPermission.swift). If those functions are unavailable, Lore shows **Couldn’t verify access** and offers System Settings instead of claiming recording is ready. It never substitutes screen-recording permission or reads the TCC database.
+
 ## Tech Stack
 
 - **Runtime:** Tauri v2 (Rust backend, web frontend)

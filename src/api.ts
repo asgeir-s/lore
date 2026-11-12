@@ -373,6 +373,26 @@ export async function openToolInstaller(tool: InstallToolKey): Promise<void> {
 
 // ── Recording API ──────────────────────────────────────────────────
 
+export type RecordingPermissionKind = "microphone" | "system_audio";
+export type RecordingPermissionStatus = "granted" | "denied" | "restricted" | "unknown" | "unavailable" | "not_required";
+export interface RecordingPermissionsStatus {
+  supported: boolean;
+  microphone: RecordingPermissionStatus;
+  system_audio: RecordingPermissionStatus;
+}
+
+export async function checkRecordingPermissions(): Promise<RecordingPermissionsStatus | null> {
+  return isTauri() ? invoke<RecordingPermissionsStatus>("check_recording_permissions") : null;
+}
+
+export async function requestRecordingPermission(kind: RecordingPermissionKind): Promise<void> {
+  if (isTauri()) await invoke<void>("request_recording_permission", { kind });
+}
+
+export async function openRecordingPrivacySettings(kind: RecordingPermissionKind): Promise<void> {
+  if (isTauri()) await invoke<void>("open_recording_privacy_settings", { kind });
+}
+
 export interface RecordingState {
   active: boolean;
   paused: boolean;

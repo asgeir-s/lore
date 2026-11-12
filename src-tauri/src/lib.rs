@@ -1,6 +1,7 @@
 mod git_sync;
 mod notes;
 mod ollama;
+mod permissions;
 mod qmd;
 mod recording;
 pub mod transcription;
@@ -600,6 +601,9 @@ fn start_recording(
     device: Option<String>,
     note_id: Option<String>,
 ) -> Result<String, String> {
+    if let Some(error) = permissions::check_recording_permissions().recording_error() {
+        return Err(error);
+    }
     let rec = state.recording.lock().map_err(|e| e.to_string())?;
     if rec.state().active {
         return Err("Recording already in progress".to_string());
@@ -857,6 +861,9 @@ pub fn run() {
             qmd::regenerate_tags,
             qmd::check_tools,
             list_input_devices,
+            permissions::check_recording_permissions,
+            permissions::request_recording_permission,
+            permissions::open_recording_privacy_settings,
             start_recording,
             append_meeting_data,
             retranscribe_note,
